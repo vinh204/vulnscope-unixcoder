@@ -28,7 +28,7 @@ import pandas as pd
 import random
 import json
 import re
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 import torch
 import numpy as np
 import pickle
@@ -38,6 +38,7 @@ import tqdm
 from tqdm import tqdm
 
 from model import *
+from data_utils import load_records
 from torch.optim import AdamW
 from transformers import (get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer)
@@ -74,7 +75,7 @@ def convert_examples_to_features(js, tokenizer, args):
     source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
     padding_length = args.block_size - len(source_ids)
     source_ids += [tokenizer.pad_token_id] * padding_length
-    return InputFeatures(source_tokens, source_ids, 0, int(js[args.label_key]))
+    return InputFeatures(source_tokens, source_ids, js.get(args.index_key, 0), int(js[args.label_key]))
 
 
 class TextDataset(Dataset):
@@ -88,13 +89,11 @@ class TextDataset(Dataset):
         self.examples = []
         data = []
         count = 0
-        with open(file_path) as f:
-            datas = json.load(f)
-            for js in datas:
-                data.append(js)
-                count += 1
-                if args.head is not None and count >= args.head:
-                    break
+        for js in load_records(file_path):
+            data.append(js)
+            count += 1
+            if args.head is not None and count >= args.head:
+                break
         for js in data:
             self.examples.append(convert_examples_to_features(js, tokenizer, args))
 
@@ -123,7 +122,8 @@ def set_seed(seed=42):
     os.environ['PYHTONHASHSEED'] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
 
 
@@ -131,7 +131,7 @@ def train(args, train_dataset, model, tokenizer):
     """ Train the model """
     train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
-                                  batch_size=args.train_batch_size, num_workers=4, pin_memory=True)
+                                  batch_size=args.train_batch_size, num_workers=0, pin_memory=args.device.type == "cuda")
 
     args.max_steps = args.num_train_epochs * len(train_dataloader)
 
@@ -150,7 +150,7 @@ def train(args, train_dataset, model, tokenizer):
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_dataset))
     logger.info("  Num Epochs = %d", args.num_train_epochs)
-    logger.info("  Instantaneous batch size per GPU = %d", args.train_batch_size // args.n_gpu)
+    logger.info("  Batch size per device = %d", args.train_batch_size // max(1, args.n_gpu))
     logger.info("  Total train batch size = %d", args.train_batch_size)
     logger.info("  Gradient accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Effective train batch size = %d", args.train_batch_size * args.gradient_accumulation_steps)
@@ -194,7 +194,7 @@ def train(args, train_dataset, model, tokenizer):
             logger.info(f"  Best {args.validation_metric}:%s", round(best_perf, 4))
             logger.info("  " + "*" * 20)
 
-            checkpoint_prefix = 'checkpoint-best-f1'
+            checkpoint_prefix = f'checkpoint-best-{args.validation_metric}'
             output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
@@ -208,7 +208,7 @@ def evaluate(args, model, tokenizer, data_file):
     """ Evaluate the model """
     eval_dataset = TextDataset(tokenizer, args, data_file)
     eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=4)
+    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=0)
 
     eval_output_dir = args.output_dir
     if not os.path.exists(eval_output_dir):
@@ -241,9 +241,11 @@ def evaluate(args, model, tokenizer, data_file):
 
     result = {
         "eval_acc": accuracy_score(labels, preds),
-        "eval_precision": precision_score(labels, preds),
-        "eval_recall": recall_score(labels, preds),
-        "eval_f1": f1_score(labels, preds),
+        "eval_precision": precision_score(labels, preds, zero_division=0),
+        "eval_recall": recall_score(labels, preds, zero_division=0),
+        "eval_f1": f1_score(labels, preds, zero_division=0),
+        "eval_roc_auc": roc_auc_score(labels, probs[:, 1]) if len(np.unique(labels)) == 2 else 0.0,
+        "eval_pr_auc": average_precision_score(labels, probs[:, 1]) if len(np.unique(labels)) == 2 else 0.0,
     }
 
     return result
@@ -253,7 +255,7 @@ def test(args, model, tokenizer, data_file):
     """ Evaluate the model """
     eval_dataset = TextDataset(tokenizer, args, data_file)
     eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=4)
+    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=0)
 
     eval_output_dir = args.output_dir
     if not os.path.exists(eval_output_dir):
@@ -300,15 +302,16 @@ def test(args, model, tokenizer, data_file):
         with open(args.csv_path, 'w') as f:
             f.write('CWE,Label,Prediction,Prob\n')
 
-    probs2 = [[prob[0], 1 - prob[0]] for prob in probs]
-    for cwe, label, pred, prob in zip(cwe_list, labels, preds, probs2):
-        temp_df = pd.DataFrame({'CWE': [cwe], 'Label': [label], 'Prediction': [pred], 'Prob': [prob]})
-        temp_df.to_csv(args.csv_path, index=False, mode='a', header=False)
+    rows = pd.DataFrame({'CWE': cwe_list, 'Label': labels, 'Prediction': preds,
+                         'SafeProb': probs[:, 0], 'VulnerableProb': probs[:, 1]})
+    rows.to_csv(args.csv_path, index=False)
     result = {
         "eval_acc": accuracy_score(labels, preds),
-        "eval_precision": precision_score(labels, preds),
-        "eval_recall": recall_score(labels, preds),
-        "eval_f1": f1_score(labels, preds),
+        "eval_precision": precision_score(labels, preds, zero_division=0),
+        "eval_recall": recall_score(labels, preds, zero_division=0),
+        "eval_f1": f1_score(labels, preds, zero_division=0),
+        "eval_roc_auc": roc_auc_score(labels, probs[:, 1]) if len(np.unique(labels)) == 2 else 0.0,
+        "eval_pr_auc": average_precision_score(labels, probs[:, 1]) if len(np.unique(labels)) == 2 else 0.0,
     }
     return result
 
@@ -361,9 +364,9 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--validation_metric', type=str, default='f1',
                         help="metric to use to for model selection based on the validation set")
-    parser.add_argument('--code_key', type=str, default="input",
+    parser.add_argument('--code_key', type=str, default="func",
                         help="dataset key for code")
-    parser.add_argument('--label_key', type=str, default="output",
+    parser.add_argument('--label_key', type=str, default="target",
                         help="dataset key for labels")
     parser.add_argument('--index_key', type=str, default="idx",
                         help="dataset key for index")
@@ -415,18 +418,18 @@ def main():
 
     # Evaluation
     if args.do_eval:
-        output_dir = os.path.join(args.output_dir, 'checkpoint-best-f1/model.bin')
+        output_dir = os.path.join(args.output_dir, f'checkpoint-best-{args.validation_metric}/model.bin')
         model_to_load = model.module if hasattr(model, 'module') else model
-        model_to_load.load_state_dict(torch.load(output_dir))
+        model_to_load.load_state_dict(torch.load(output_dir, map_location=args.device, weights_only=True))
         result = evaluate(args, model, tokenizer, args.eval_data_file)
         logger.info("***** Eval results *****")
         for key in sorted(result.keys()):
             logger.info("  %s = %s", key, str(round(result[key] * 100 if "map" in key else result[key], 4)))
 
     if args.do_test:
-        output_dir = os.path.join(args.output_dir, 'checkpoint-best-f1/model.bin')
+        output_dir = os.path.join(args.output_dir, f'checkpoint-best-{args.validation_metric}/model.bin')
         model_to_load = model.module if hasattr(model, 'module') else model
-        model_to_load.load_state_dict(torch.load(output_dir))
+        model_to_load.load_state_dict(torch.load(output_dir, map_location=args.device, weights_only=True))
         result = test(args, model, tokenizer, args.test_data_file)
         logger.info("***** Test results *****")
         for key in sorted(result.keys()):

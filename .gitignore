@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+outputs/
+results/
+
+# Downloaded/generated Devign data (keep local; do not commit large files).
+data/devign/function.json
+data/devign/*.jsonl
