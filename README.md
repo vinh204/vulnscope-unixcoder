@@ -68,6 +68,39 @@ python -m unittest discover -s tests -v
 python -m compileall code
 ```
 
+## Chạy bằng Docker
+
+Checkpoint không được lưu trong Git repository. Khi chạy local, mount checkpoint vào container:
+
+```powershell
+docker build -t vulnscope-unixcoder .
+docker run --rm -p 7860:7860 `
+  -v "${PWD}/outputs/checkpoint-best-f1/model.bin:/app/models/model.bin:ro" `
+  vulnscope-unixcoder
+```
+
+Mở `http://localhost:7860`. Container chạy bằng user không có quyền root và có health check tại `/_stcore/health`.
+
+## Deploy Hugging Face Space
+
+1. Tạo một **Model repository** và tải `model.bin` lên đó.
+2. Tạo một **Docker Space** từ repository này.
+3. Cấu hình các biến môi trường:
+
+```text
+CHECKPOINT_REPO_ID=vinh204/<ten-model-repo>
+CHECKPOINT_FILENAME=model.bin
+CHECKPOINT_REVISION=<commit-hash-hoac-tag>
+MODEL_NAME=microsoft/unixcoder-base
+APP_ENV=production
+```
+
+Nếu Model repository là private, thêm `HF_TOKEN` dưới dạng Space secret. Không commit token vào source code. Khi khởi động, container tải checkpoint từ Model repository và lưu trong Hugging Face cache.
+
+## CI
+
+GitHub Actions tự động chạy unit test, kiểm tra cú pháp Python và build Docker image cho mỗi push hoặc pull request vào `main`.
+
 ## Cấu trúc chính
 
 - `code/run.py`: fine-tuning và đánh giá trong từng epoch.
@@ -75,6 +108,7 @@ python -m compileall code
 - `code/evaluate.py`: đánh giá test set, xuất artifact cho dashboard.
 - `code/metrics.py`: metric nhị phân an toàn khi lớp bị thiếu.
 - `code/app.py`: ứng dụng Streamlit.
+- `code/bootstrap.py`: chuẩn bị checkpoint và khởi động production server.
 
 ## Lưu ý khoa học
 

@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 outputs/
 results/
+.env
+.streamlit/secrets.toml
+.cache/
+models/
 
 # Downloaded/generated Devign data (keep local; do not commit large files).
 data/devign/function.json

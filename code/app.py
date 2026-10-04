@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from difflib import unified_diff
 from pathlib import Path
@@ -12,8 +13,12 @@ import pandas as pd
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHECKPOINT = ROOT / "outputs" / "checkpoint-best-f1" / "model.bin"
+DEFAULT_CHECKPOINT = Path(os.getenv(
+    "CHECKPOINT_PATH", ROOT / "outputs" / "checkpoint-best-f1" / "model.bin"
+))
 DEFAULT_METADATA = DEFAULT_CHECKPOINT.with_name("metadata.json")
+MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/unixcoder-base")
+APP_ENV = os.getenv("APP_ENV", "development").lower()
 EXAMPLES = {
     "Buffer overflow": '''void copy_input(const char *input) {
     char buffer[16];
@@ -53,16 +58,18 @@ def illustrative_prediction(code: str):
 
 
 @st.cache_resource(show_spinner="Đang nạp UniXcoder...")
-def load_predictor(checkpoint: str, block_size: int):
+def load_predictor(checkpoint: str, block_size: int, model_name: str):
     # Import lazily so the UI-only demo starts quickly without loading PyTorch.
     from inference import UniXcoderPredictor
-    return UniXcoderPredictor(checkpoint=checkpoint, block_size=block_size)
+    return UniXcoderPredictor(
+        checkpoint=checkpoint, block_size=block_size, model_name=model_name
+    )
 
 
 def get_prediction(code, checkpoint, block_size, demo_mode):
     if demo_mode:
         return illustrative_prediction(code), None
-    predictor = load_predictor(checkpoint, block_size)
+    predictor = load_predictor(checkpoint, block_size, MODEL_NAME)
     return predictor.predict(code).to_dict(), predictor
 
 
@@ -111,7 +118,7 @@ def analyzer_page(checkpoint, block_size, threshold, demo_mode):
                    st.session_state.get("explain_block_size") == block_size)
     if can_explain and st.button("Giải thích token", use_container_width=True):
         try:
-            predictor = load_predictor(checkpoint, block_size)
+            predictor = load_predictor(checkpoint, block_size, MODEL_NAME)
             with st.spinner("Đang che lần lượt từng token để kiểm chứng..."):
                 explanation = predictor.explain(code)
             # Force primitive values; this avoids dataframe parsers interpreting token text.
@@ -192,10 +199,20 @@ def main():
     st.caption("Phát hiện và giải thích lỗ hổng C/C++ bằng UniXcoder")
     with st.sidebar:
         page = st.radio("Chức năng", ["Phân tích", "So sánh bản vá", "Dashboard"])
-        checkpoint = st.text_input("Checkpoint", str(DEFAULT_CHECKPOINT))
+        if APP_ENV == "production":
+            checkpoint = str(DEFAULT_CHECKPOINT)
+            st.caption(f"Model: {MODEL_NAME}")
+        else:
+            checkpoint = st.text_input("Checkpoint", str(DEFAULT_CHECKPOINT))
         block_size = st.select_slider("Block size", [128, 256, 512], value=128)
         threshold = st.slider("Ngưỡng cảnh báo", 0.05, 0.95, 0.44, 0.01)
-        demo_mode = st.toggle("Chế độ minh họa", value=not Path(checkpoint).is_file())
+        checkpoint_exists = Path(checkpoint).is_file()
+        if APP_ENV == "production":
+            demo_mode = False
+            if not checkpoint_exists:
+                st.error("Máy chủ chưa được cấu hình checkpoint mô hình.")
+        else:
+            demo_mode = st.toggle("Chế độ minh họa", value=not checkpoint_exists)
         if demo_mode:
             st.warning("Kết quả đang dùng quy tắc minh họa, không phải UniXcoder và không được dùng trong báo cáo.")
         elif Path(checkpoint).resolve() == DEFAULT_CHECKPOINT.resolve():
