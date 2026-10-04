@@ -49,7 +49,12 @@ SAFE_PATCH = '''void copy_input(const char *input) {
 def inject_styles():
     st.markdown("""
     <style>
-    .block-container {padding-top: 2rem; padding-bottom: 3rem; max-width: 1280px;}
+    .block-container {
+        padding-top: 2.75rem;
+        padding-bottom: 9rem;
+        max-width: 1280px;
+    }
+    [data-testid="stAppViewContainer"] {scroll-padding-top: 4rem;}
     [data-testid="stSidebar"] {border-right: 1px solid rgba(148,163,184,.18);}
     [data-testid="stMetric"] {
         background: rgba(30,41,59,.55); border: 1px solid rgba(148,163,184,.18);
@@ -77,6 +82,11 @@ def inject_styles():
     .vs-note {
         padding: .8rem 1rem; border-radius: 12px; color: #aab3c2;
         background: rgba(30,41,59,.4); border: 1px solid rgba(148,163,184,.14);
+    }
+    @media (max-width: 768px) {
+        .block-container {padding-top: 3.5rem; padding-bottom: 10rem;}
+        .vs-hero {padding: 1.1rem;}
+        .vs-title {font-size: 1.75rem;}
     }
     </style>
     """, unsafe_allow_html=True)
