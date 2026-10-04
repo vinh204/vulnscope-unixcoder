@@ -45,6 +45,20 @@ SAFE_PATCH = '''void copy_input(const char *input) {
     snprintf(buffer, sizeof(buffer), "%s", input);
 }'''
 
+LOGO_SVG = """
+<svg viewBox="0 0 72 72" role="img" aria-label="VulnScope logo" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vs-gradient" x1="8" y1="8" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34D399"/><stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect x="5" y="5" width="62" height="62" rx="18" fill="#0F1F28" stroke="url(#vs-gradient)" stroke-width="3"/>
+  <path d="M27 24 17 35l10 11M41 24l10 11-10 11M38 19 31 51" fill="none" stroke="url(#vs-gradient)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="51" cy="50" r="8" fill="#0F1F28" stroke="#6EE7B7" stroke-width="3"/>
+  <path d="m57 56 7 7" stroke="#6EE7B7" stroke-width="4" stroke-linecap="round"/>
+</svg>
+"""
+
 
 def inject_styles():
     st.markdown("""
@@ -67,12 +81,11 @@ def inject_styles():
     }
     .vs-title {font-size: 2.15rem; font-weight: 750; margin: 0; letter-spacing: -.03em;}
     .vs-subtitle {color: #aab3c2; margin: .35rem 0 0;}
-    .vs-badge {
-        display: inline-block; margin-top: .85rem; margin-right: .45rem;
-        padding: .28rem .65rem; border-radius: 999px; font-size: .78rem;
-        background: rgba(16,185,129,.13); color: #6ee7b7;
-        border: 1px solid rgba(52,211,153,.25);
-    }
+    .vs-brand {display: flex; align-items: center; gap: .9rem;}
+    .vs-logo {width: 62px; height: 62px; flex: 0 0 62px;}
+    .vs-sidebar-brand {display: flex; align-items: center; gap: .65rem; margin-bottom: 1rem;}
+    .vs-sidebar-logo {width: 38px; height: 38px; flex: 0 0 38px;}
+    .vs-sidebar-name {font-size: 1.45rem; font-weight: 720; letter-spacing: -.02em;}
     .vs-result {
         padding: 1rem 1.2rem; border-radius: 14px; margin: .8rem 0 1rem;
         border-left: 5px solid var(--accent); background: rgba(30,41,59,.48);
@@ -92,16 +105,14 @@ def inject_styles():
     """, unsafe_allow_html=True)
 
 
-def hero(checkpoint_ready: bool):
-    status = "Mô hình đã sẵn sàng" if checkpoint_ready else "Không thể tải mô hình"
+def hero():
     st.markdown(f"""
     <div class="vs-hero">
-      <div class="vs-title">🛡️ VulnScope</div>
+      <div class="vs-brand">
+        <div class="vs-logo">{LOGO_SVG}</div>
+        <div class="vs-title">VulnScope</div>
+      </div>
       <div class="vs-subtitle">Phát hiện, so sánh và giải thích rủi ro bảo mật trong hàm C/C++ bằng UniXcoder.</div>
-      <span class="vs-badge">● {status}</span>
-      <span class="vs-badge">UniXcoder</span>
-      <span class="vs-badge">Devign</span>
-      <span class="vs-badge">Checkpoint thật</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -311,7 +322,7 @@ def dashboard_page():
 
 
 def main():
-    st.set_page_config(page_title="VulnScope", page_icon="🛡️", layout="wide")
+    st.set_page_config(page_title="VulnScope", page_icon="🔎", layout="wide")
     inject_styles()
     checkpoint_error = None
     try:
@@ -320,7 +331,11 @@ def main():
         checkpoint = str(DEFAULT_CHECKPOINT)
         checkpoint_error = f"{type(exc).__name__}: {exc}"
     with st.sidebar:
-        st.markdown("## 🛡️ VulnScope")
+        st.markdown(
+            f'<div class="vs-sidebar-brand"><div class="vs-sidebar-logo">{LOGO_SVG}</div>'
+            '<div class="vs-sidebar-name">VulnScope</div></div>',
+            unsafe_allow_html=True,
+        )
         page = st.radio("Chức năng", ["Phân tích", "So sánh bản vá", "Dashboard"])
         if APP_ENV == "production":
             st.success("● Model sẵn sàng" if Path(checkpoint).is_file() else "Model chưa sẵn sàng")
@@ -351,7 +366,7 @@ def main():
             st.info("Checkpoint CPU demo: 2.000 mẫu huấn luyện, encoder đóng băng, 3 epoch, block size 128.")
         st.divider()
         st.caption("Công cụ hỗ trợ sàng lọc, không thay thế kiểm thử bảo mật chuyên sâu.")
-    hero(Path(checkpoint).is_file())
+    hero()
     if page == "Phân tích":
         analyzer_page(checkpoint, block_size, threshold, demo_mode)
     elif page == "So sánh bản vá":
