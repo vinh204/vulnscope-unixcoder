@@ -18,7 +18,14 @@ DEFAULT_CHECKPOINT = Path(os.getenv(
 ))
 DEFAULT_METADATA = DEFAULT_CHECKPOINT.with_name("metadata.json")
 MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/unixcoder-base")
-APP_ENV = os.getenv("APP_ENV", "development").lower()
+CHECKPOINT_REPO_ID = os.getenv(
+    "CHECKPOINT_REPO_ID", "vinh204/vulnscope-unixcoder-devign"
+)
+CHECKPOINT_FILENAME = os.getenv("CHECKPOINT_FILENAME", "model.bin")
+CHECKPOINT_REVISION = os.getenv(
+    "CHECKPOINT_REVISION", "e8c7be3e075f261b8dee20196795b634e3d36f2a"
+)
+APP_ENV = os.getenv("APP_ENV", "production").lower()
 EXAMPLES = {
     "Buffer overflow": '''void copy_input(const char *input) {
     char buffer[16];
@@ -63,6 +70,23 @@ def load_predictor(checkpoint: str, block_size: int, model_name: str):
     from inference import UniXcoderPredictor
     return UniXcoderPredictor(
         checkpoint=checkpoint, block_size=block_size, model_name=model_name
+    )
+
+
+@st.cache_resource(show_spinner="Đang tải checkpoint VulnScope...")
+def resolve_checkpoint(configured_path: str) -> str:
+    """Use a local checkpoint or fetch the pinned public artifact."""
+    local_path = Path(configured_path)
+    if local_path.is_file():
+        return str(local_path)
+
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(
+        repo_id=CHECKPOINT_REPO_ID,
+        filename=CHECKPOINT_FILENAME,
+        revision=CHECKPOINT_REVISION,
+        token=os.getenv("HF_TOKEN"),
     )
 
 
@@ -197,20 +221,27 @@ def main():
     st.set_page_config(page_title="VulnScope", page_icon="🛡️", layout="wide")
     st.title("🛡️ VulnScope")
     st.caption("Phát hiện và giải thích lỗ hổng C/C++ bằng UniXcoder")
+    checkpoint_error = None
+    try:
+        checkpoint = resolve_checkpoint(str(DEFAULT_CHECKPOINT))
+    except Exception as exc:
+        checkpoint = str(DEFAULT_CHECKPOINT)
+        checkpoint_error = f"{type(exc).__name__}: {exc}"
     with st.sidebar:
         page = st.radio("Chức năng", ["Phân tích", "So sánh bản vá", "Dashboard"])
         if APP_ENV == "production":
-            checkpoint = str(DEFAULT_CHECKPOINT)
             st.caption(f"Model: {MODEL_NAME}")
         else:
-            checkpoint = st.text_input("Checkpoint", str(DEFAULT_CHECKPOINT))
+            checkpoint = st.text_input("Checkpoint", checkpoint)
         block_size = st.select_slider("Block size", [128, 256, 512], value=128)
         threshold = st.slider("Ngưỡng cảnh báo", 0.05, 0.95, 0.44, 0.01)
         checkpoint_exists = Path(checkpoint).is_file()
         if APP_ENV == "production":
             demo_mode = False
             if not checkpoint_exists:
-                st.error("Máy chủ chưa được cấu hình checkpoint mô hình.")
+                st.error("Không thể tải checkpoint mô hình.")
+                if checkpoint_error:
+                    st.caption(checkpoint_error)
         else:
             demo_mode = st.toggle("Chế độ minh họa", value=not checkpoint_exists)
         if demo_mode:

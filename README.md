@@ -16,7 +16,13 @@ pip install -r requirements.txt
 streamlit run code/app.py
 ```
 
-Mặc định ứng dụng tìm checkpoint tại `outputs/checkpoint-best-f1/model.bin`. Khi chưa có checkpoint, ứng dụng bật **chế độ minh họa**. Chế độ này chỉ kiểm tra giao diện bằng quy tắc đơn giản, được ghi nhãn rõ ràng và không được dùng làm kết quả báo cáo.
+Ứng dụng ưu tiên checkpoint tại `outputs/checkpoint-best-f1/model.bin`. Nếu file
+không tồn tại, ứng dụng tự tải artifact đã ghim phiên bản từ
+[`vinh204/vulnscope-unixcoder-devign`](https://huggingface.co/vinh204/vulnscope-unixcoder-devign).
+
+Để phát triển giao diện mà không tải mô hình, đặt `APP_ENV=development` và bật
+**chế độ minh họa**. Chế độ này chỉ kiểm tra giao diện bằng quy tắc đơn giản,
+được ghi nhãn rõ ràng và không được dùng làm kết quả báo cáo.
 
 ## Dữ liệu Devign
 
@@ -96,6 +102,19 @@ APP_ENV=production
 ```
 
 Nếu Model repository là private, thêm `HF_TOKEN` dưới dạng Space secret. Không commit token vào source code. Khi khởi động, container tải checkpoint từ Model repository và lưu trong Hugging Face cache.
+
+Lưu ý: Hugging Face hiện yêu cầu gói PRO để tạo Docker/Gradio Space mới. Có thể
+deploy miễn phí bằng **Streamlit Community Cloud** với các giá trị:
+
+```text
+Repository: vinh204/vulnscope-unixcoder
+Branch: main
+Main file path: code/app.py
+App URL: vulnscope-unixcoder
+```
+
+Ứng dụng tự tải checkpoint công khai nên không cần khai báo secret trên
+Streamlit Community Cloud.
 
 ## CI
 
