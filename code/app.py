@@ -46,6 +46,56 @@ SAFE_PATCH = '''void copy_input(const char *input) {
 }'''
 
 
+def inject_styles():
+    st.markdown("""
+    <style>
+    .block-container {padding-top: 2rem; padding-bottom: 3rem; max-width: 1280px;}
+    [data-testid="stSidebar"] {border-right: 1px solid rgba(148,163,184,.18);}
+    [data-testid="stMetric"] {
+        background: rgba(30,41,59,.55); border: 1px solid rgba(148,163,184,.18);
+        padding: 1rem; border-radius: 14px;
+    }
+    .vs-hero {
+        padding: 1.45rem 1.6rem; border-radius: 18px; margin-bottom: 1.4rem;
+        background: linear-gradient(120deg, rgba(16,185,129,.16), rgba(59,130,246,.10));
+        border: 1px solid rgba(52,211,153,.24);
+    }
+    .vs-title {font-size: 2.15rem; font-weight: 750; margin: 0; letter-spacing: -.03em;}
+    .vs-subtitle {color: #aab3c2; margin: .35rem 0 0;}
+    .vs-badge {
+        display: inline-block; margin-top: .85rem; margin-right: .45rem;
+        padding: .28rem .65rem; border-radius: 999px; font-size: .78rem;
+        background: rgba(16,185,129,.13); color: #6ee7b7;
+        border: 1px solid rgba(52,211,153,.25);
+    }
+    .vs-result {
+        padding: 1rem 1.2rem; border-radius: 14px; margin: .8rem 0 1rem;
+        border-left: 5px solid var(--accent); background: rgba(30,41,59,.48);
+    }
+    .vs-result h3 {margin: 0 0 .25rem; color: var(--accent);}
+    .vs-result p {margin: 0; color: #aab3c2;}
+    .vs-note {
+        padding: .8rem 1rem; border-radius: 12px; color: #aab3c2;
+        background: rgba(30,41,59,.4); border: 1px solid rgba(148,163,184,.14);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+def hero(checkpoint_ready: bool):
+    status = "Mô hình đã sẵn sàng" if checkpoint_ready else "Không thể tải mô hình"
+    st.markdown(f"""
+    <div class="vs-hero">
+      <div class="vs-title">🛡️ VulnScope</div>
+      <div class="vs-subtitle">Phát hiện, so sánh và giải thích rủi ro bảo mật trong hàm C/C++ bằng UniXcoder.</div>
+      <span class="vs-badge">● {status}</span>
+      <span class="vs-badge">UniXcoder</span>
+      <span class="vs-badge">Devign</span>
+      <span class="vs-badge">Checkpoint thật</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def illustrative_prediction(code: str):
     """Transparent UI-only fallback; never reported as an experiment result."""
     started = perf_counter()
@@ -100,22 +150,33 @@ def get_prediction(code, checkpoint, block_size, demo_mode):
 def show_result(result, threshold):
     probability = float(result["vulnerable_probability"])
     predicted = probability >= threshold
-    if predicted:
-        st.error(f"⚠️ Nguy cơ lỗ hổng — {probability:.1%}")
-    else:
-        st.success(f"✅ Chưa phát hiện nguy cơ cao — {probability:.1%}")
-    st.text(f"Xác suất: {probability:.1%} | Token: {int(result['token_count'])} | "
-            f"Thời gian: {float(result['elapsed_ms']):.1f} ms")
+    confidence = probability if predicted else 1 - probability
+    accent = "#fb7185" if predicted else "#34d399"
+    title = "Có dấu hiệu lỗ hổng" if predicted else "Chưa phát hiện nguy cơ cao"
+    detail = (
+        f"Xác suất vulnerable {probability:.1%}, so với ngưỡng cảnh báo {threshold:.0%}."
+    )
+    st.markdown(
+        f'<div class="vs-result" style="--accent:{accent}"><h3>{"⚠️" if predicted else "✅"} '
+        f'{title}</h3><p>{detail}</p></div>', unsafe_allow_html=True,
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Xác suất lỗ hổng", f"{probability:.1%}")
+    c2.metric("Độ tin cậy", f"{confidence:.1%}")
+    c3.metric("Token phân tích", f"{int(result['token_count']):,}")
+    c4.metric("Độ trễ", f"{float(result['elapsed_ms']):.0f} ms")
     if result["truncated"]:
         st.warning("Đầu vào đã bị cắt; kết quả có thể bỏ sót phần code quan trọng.")
 
 
 def analyzer_page(checkpoint, block_size, threshold, demo_mode):
-    st.header("Phân tích mã nguồn")
-    example = st.selectbox("Ví dụ", list(EXAMPLES))
-    uploaded = st.file_uploader("Hoặc tải file C/C++", type=["c", "cc", "cpp", "h", "hpp"])
+    st.subheader("Phân tích mã nguồn")
+    st.caption("Dán một hàm C/C++ hoặc chọn ví dụ để mô hình ước lượng rủi ro.")
+    left, right = st.columns([1, 1])
+    example = left.selectbox("Mẫu kiểm thử", list(EXAMPLES))
+    uploaded = right.file_uploader("Tải file C/C++", type=["c", "cc", "cpp", "h", "hpp"])
     initial = uploaded.getvalue().decode("utf-8", errors="replace") if uploaded else EXAMPLES[example]
-    code = st.text_area("Mã nguồn", initial, height=280)
+    code = st.text_area("Mã nguồn", initial, height=250, placeholder="Dán một hàm C/C++ tại đây...")
     if st.button("Phân tích", type="primary", use_container_width=True):
         result = None
         predictor = None
@@ -128,14 +189,26 @@ def analyzer_page(checkpoint, block_size, threshold, demo_mode):
         # Rendering is intentionally outside the inference try/except. This
         # prevents UI errors from being misreported as model prediction errors.
         if result is not None:
-            show_result(result, threshold)
+            st.session_state["last_analysis"] = {
+                "code": code, "result": result, "threshold": threshold,
+            }
             if predictor is not None:
                 st.session_state["explain_code"] = code
                 st.session_state["explain_checkpoint"] = checkpoint
                 st.session_state["explain_block_size"] = block_size
-                st.info("Dự đoán đã hoàn tất. Bấm bên dưới nếu cần tính giải thích token (sẽ chậm hơn).")
             else:
                 st.info("Chế độ minh họa không tạo giải thích mô hình. Hãy chọn checkpoint thật để bảo vệ.")
+
+    analysis = st.session_state.get("last_analysis")
+    if analysis and analysis.get("code") == code:
+        st.divider()
+        st.subheader("Kết quả phân tích")
+        show_result(analysis["result"], analysis["threshold"])
+        st.download_button(
+            "Tải kết quả JSON",
+            json.dumps(analysis["result"], ensure_ascii=False, indent=2),
+            file_name="vulnscope-result.json", mime="application/json",
+        )
 
     can_explain = (not demo_mode and st.session_state.get("explain_code") == code and
                    st.session_state.get("explain_checkpoint") == checkpoint and
@@ -162,7 +235,8 @@ def analyzer_page(checkpoint, block_size, threshold, demo_mode):
 
 
 def comparison_page(checkpoint, block_size, threshold, demo_mode):
-    st.header("So sánh trước và sau bản vá")
+    st.subheader("So sánh trước và sau bản vá")
+    st.caption("Đo mức thay đổi rủi ro sau khi áp dụng bản vá, dùng cùng một checkpoint và ngưỡng.")
     left, right = st.columns(2)
     before = left.text_area("Trước bản vá", EXAMPLES["Buffer overflow"], height=260)
     after = right.text_area("Sau bản vá", SAFE_PATCH, height=260)
@@ -175,6 +249,10 @@ def comparison_page(checkpoint, block_size, threshold, demo_mode):
             c1.metric("Trước vá", f"{p_before:.1%}")
             c2.metric("Sau vá", f"{p_after:.1%}")
             c3.metric("Thay đổi", f"{p_after - p_before:+.1%}")
+            if p_after < p_before:
+                st.success(f"✅ Bản vá làm giảm rủi ro dự đoán {(p_before - p_after):.1%}.")
+            else:
+                st.warning("⚠️ Bản vá chưa làm giảm rủi ro dự đoán; cần tiếp tục kiểm tra.")
             diff = "\n".join(unified_diff(before.splitlines(), after.splitlines(),
                                           fromfile="before.c", tofile="after.c", lineterm=""))
             st.code(diff or "Không có thay đổi", language="diff")
@@ -183,7 +261,7 @@ def comparison_page(checkpoint, block_size, threshold, demo_mode):
 
 
 def dashboard_page():
-    st.header("Dashboard thực nghiệm")
+    st.subheader("Dashboard thực nghiệm")
     metrics_path = ROOT / "results" / "metrics.json"
     predictions_path = ROOT / "results" / "predictions.csv"
     if not metrics_path.exists():
@@ -195,23 +273,28 @@ def dashboard_page():
         )
         return
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-    sample_count = None
+    sample_count = metrics.get("sample_count")
     if predictions_path.exists():
         frame = pd.read_csv(predictions_path)
         sample_count = len(frame)
     scope = f" trên {sample_count:,} mẫu test" if sample_count is not None else ""
-    st.caption(
-        f"Checkpoint demo CPU{scope}: encoder đóng băng, huấn luyện 3 epoch trên 2.000 mẫu. "
-        "Đây không phải kết quả fine-tune toàn bộ Devign."
+    st.info(
+        f"Baseline checkpoint{scope}: encoder đóng băng, huấn luyện 3 epoch trên 2.000 mẫu. "
+        "Các số liệu được đọc từ artifact đánh giá thật và chưa phải kết quả cuối của đồ án."
     )
     cols = st.columns(6)
     for column, key in zip(cols, ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]):
         value = metrics.get(key)
         column.metric(key.upper().replace("_", "-"), "N/A" if value is None else f"{value:.3f}")
     matrix = metrics.get("confusion_matrix", [[0, 0], [0, 0]])
-    st.subheader("Confusion matrix")
-    st.dataframe(pd.DataFrame(matrix, index=["Thật: An toàn", "Thật: Có lỗ hổng"],
-                              columns=["Đoán: An toàn", "Đoán: Có lỗ hổng"]), use_container_width=True)
+    left, right = st.columns([1, 1])
+    left.subheader("Confusion matrix")
+    left.dataframe(pd.DataFrame(matrix, index=["Thật: An toàn", "Thật: Có lỗ hổng"],
+                                columns=["Đoán: An toàn", "Đoán: Có lỗ hổng"]), use_container_width=True)
+    right.subheader("Phân bố kết quả")
+    right.bar_chart(pd.DataFrame({
+        "Số mẫu": [matrix[0][0], matrix[0][1], matrix[1][0], matrix[1][1]]
+    }, index=["True negative", "False positive", "False negative", "True positive"]))
     if predictions_path.exists():
         st.subheader("Dự đoán chi tiết")
         st.dataframe(frame, use_container_width=True, hide_index=True)
@@ -219,8 +302,7 @@ def dashboard_page():
 
 def main():
     st.set_page_config(page_title="VulnScope", page_icon="🛡️", layout="wide")
-    st.title("🛡️ VulnScope")
-    st.caption("Phát hiện và giải thích lỗ hổng C/C++ bằng UniXcoder")
+    inject_styles()
     checkpoint_error = None
     try:
         checkpoint = resolve_checkpoint(str(DEFAULT_CHECKPOINT))
@@ -228,13 +310,22 @@ def main():
         checkpoint = str(DEFAULT_CHECKPOINT)
         checkpoint_error = f"{type(exc).__name__}: {exc}"
     with st.sidebar:
+        st.markdown("## 🛡️ VulnScope")
         page = st.radio("Chức năng", ["Phân tích", "So sánh bản vá", "Dashboard"])
         if APP_ENV == "production":
-            st.caption(f"Model: {MODEL_NAME}")
+            st.success("● Model sẵn sàng" if Path(checkpoint).is_file() else "Model chưa sẵn sàng")
+            st.caption(f"`{MODEL_NAME}`")
         else:
             checkpoint = st.text_input("Checkpoint", checkpoint)
-        block_size = st.select_slider("Block size", [128, 256, 512], value=128)
-        threshold = st.slider("Ngưỡng cảnh báo", 0.05, 0.95, 0.44, 0.01)
+        with st.expander("Cấu hình nâng cao"):
+            block_size = st.select_slider(
+                "Độ dài đầu vào (token)", [128, 256, 512], value=128,
+                help="Đầu vào dài hơn giới hạn sẽ bị cắt. Checkpoint demo được huấn luyện với 128 token.",
+            )
+            threshold = st.slider(
+                "Ngưỡng cảnh báo", 0.05, 0.95, 0.44, 0.01,
+                help="Được chọn trên validation set; xác suất từ ngưỡng này trở lên được cảnh báo.",
+            )
         checkpoint_exists = Path(checkpoint).is_file()
         if APP_ENV == "production":
             demo_mode = False
@@ -248,6 +339,9 @@ def main():
             st.warning("Kết quả đang dùng quy tắc minh họa, không phải UniXcoder và không được dùng trong báo cáo.")
         elif Path(checkpoint).resolve() == DEFAULT_CHECKPOINT.resolve():
             st.info("Checkpoint CPU demo: 2.000 mẫu huấn luyện, encoder đóng băng, 3 epoch, block size 128.")
+        st.divider()
+        st.caption("Công cụ hỗ trợ sàng lọc, không thay thế kiểm thử bảo mật chuyên sâu.")
+    hero(Path(checkpoint).is_file())
     if page == "Phân tích":
         analyzer_page(checkpoint, block_size, threshold, demo_mode)
     elif page == "So sánh bản vá":

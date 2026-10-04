@@ -20,6 +20,7 @@ RUN pip install --upgrade pip \
 
 COPY --chown=appuser:appuser code ./code
 COPY --chown=appuser:appuser .streamlit ./.streamlit
+COPY --chown=appuser:appuser results ./results
 COPY --chown=appuser:appuser README.md ./README.md
 
 RUN mkdir -p /app/models /app/.cache/huggingface \

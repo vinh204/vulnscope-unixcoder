@@ -2,7 +2,8 @@
 __pycache__/
 *.py[cod]
 outputs/
-results/
+results/*
+!results/metrics.json
 .env
 .streamlit/secrets.toml
 .cache/
