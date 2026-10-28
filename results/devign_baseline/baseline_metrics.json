@@ -1,0 +1,104 @@
+{
+  "model": "TF-IDF word unigrams/bigrams + Logistic Regression",
+  "threshold_selected_on": "validation",
+  "threshold": 0.3687146893563027,
+  "validation": {
+    "accuracy": 0.6006588579795022,
+    "precision": 0.5244897959183673,
+    "recall": 0.8660488626790227,
+    "f1": 0.6533206228153797,
+    "roc_auc": 0.6973087629470287,
+    "pr_auc": 0.6342505247672734,
+    "threshold": 0.3687146893563027,
+    "sample_count": 2732,
+    "confusion_matrix": [
+      [
+        613,
+        932
+      ],
+      [
+        159,
+        1028
+      ]
+    ],
+    "best_f1_on_validation": 0.6533206228149099
+  },
+  "test": {
+    "accuracy": 0.6013909224011713,
+    "precision": 0.5413346613545816,
+    "recall": 0.8661354581673307,
+    "f1": 0.6662580447441006,
+    "roc_auc": 0.6812201431241857,
+    "pr_auc": 0.6345076596125413,
+    "threshold": 0.3687146893563027,
+    "sample_count": 2732,
+    "confusion_matrix": [
+      [
+        556,
+        921
+      ],
+      [
+        168,
+        1087
+      ]
+    ]
+  },
+  "split_audit": {
+    "duplicates": {
+      "train": {
+        "rows": 21854,
+        "unique_function_hashes": 21808,
+        "duplicate_rows_within_split": 46
+      },
+      "validation": {
+        "rows": 2732,
+        "unique_function_hashes": 2732,
+        "duplicate_rows_within_split": 0
+      },
+      "test": {
+        "rows": 2732,
+        "unique_function_hashes": 2731,
+        "duplicate_rows_within_split": 1
+      }
+    },
+    "cross_split_overlap": {
+      "train__validation": {
+        "exact_function_hash_overlap": 8,
+        "label_conflict_hash_count": 8,
+        "project_overlap_count": 2,
+        "projects_in_both": [
+          "FFmpeg",
+          "qemu"
+        ]
+      },
+      "train__test": {
+        "exact_function_hash_overlap": 4,
+        "label_conflict_hash_count": 4,
+        "project_overlap_count": 2,
+        "projects_in_both": [
+          "FFmpeg",
+          "qemu"
+        ]
+      },
+      "validation__test": {
+        "exact_function_hash_overlap": 1,
+        "label_conflict_hash_count": 1,
+        "project_overlap_count": 2,
+        "projects_in_both": [
+          "FFmpeg",
+          "qemu"
+        ]
+      }
+    }
+  },
+  "parameters": {
+    "max_features": 200000,
+    "ngram_range": [
+      1,
+      2
+    ],
+    "min_df": 2,
+    "sublinear_tf": true,
+    "classifier": "LogisticRegression(solver=liblinear, max_iter=1000, random_state=42)"
+  }
+}

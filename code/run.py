@@ -133,7 +133,10 @@ def train(args, train_dataset, model, tokenizer):
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
                                   batch_size=args.train_batch_size, num_workers=0, pin_memory=args.device.type == "cuda")
 
-    args.max_steps = args.num_train_epochs * len(train_dataloader)
+    # The scheduler counts optimizer updates, not mini-batches. Account for
+    # gradient accumulation when computing the total and warmup steps.
+    updates_per_epoch = (len(train_dataloader) + args.gradient_accumulation_steps - 1) // args.gradient_accumulation_steps
+    args.max_steps = args.num_train_epochs * updates_per_epoch
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ['bias', 'LayerNorm.weight']
@@ -143,7 +146,7 @@ def train(args, train_dataset, model, tokenizer):
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.max_steps * 0.1,
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=int(args.max_steps * 0.1),
                                                 num_training_steps=args.max_steps)
 
     # Train!
@@ -168,18 +171,20 @@ def train(args, train_dataset, model, tokenizer):
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
+            raw_loss = loss.item()
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-            losses.append(loss.item())
+            losses.append(raw_loss)
 
             if (step + 1) % 100 == 0:
                 logger.info("epoch {} step {} loss {}".format(idx, step + 1, round(np.mean(losses[-100:]), 4)))
 
-            if (step + 1) % args.gradient_accumulation_steps == 0:
+            if ((step + 1) % args.gradient_accumulation_steps == 0
+                    or (step + 1) == len(train_dataloader)):
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()

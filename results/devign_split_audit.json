@@ -1,0 +1,48 @@
+{
+  "duplicates": {
+    "train": {
+      "rows": 21854,
+      "unique_function_hashes": 21808,
+      "duplicate_rows_within_split": 46
+    },
+    "validation": {
+      "rows": 2732,
+      "unique_function_hashes": 2732,
+      "duplicate_rows_within_split": 0
+    },
+    "test": {
+      "rows": 2732,
+      "unique_function_hashes": 2731,
+      "duplicate_rows_within_split": 1
+    }
+  },
+  "cross_split_overlap": {
+    "train__validation": {
+      "exact_function_hash_overlap": 8,
+      "label_conflict_hash_count": 8,
+      "project_overlap_count": 2,
+      "projects_in_both": [
+        "FFmpeg",
+        "qemu"
+      ]
+    },
+    "train__test": {
+      "exact_function_hash_overlap": 4,
+      "label_conflict_hash_count": 4,
+      "project_overlap_count": 2,
+      "projects_in_both": [
+        "FFmpeg",
+        "qemu"
+      ]
+    },
+    "validation__test": {
+      "exact_function_hash_overlap": 1,
+      "label_conflict_hash_count": 1,
+      "project_overlap_count": 2,
+      "projects_in_both": [
+        "FFmpeg",
+        "qemu"
+      ]
+    }
+  }
+}

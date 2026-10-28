@@ -1,0 +1,90 @@
+[
+  {
+    "accuracy": 0.585285505124451,
+    "precision": 0.5287735849056604,
+    "recall": 0.8932270916334661,
+    "f1": 0.6642962962962963,
+    "roc_auc": 0.694552865046247,
+    "pr_auc": 0.6692346407357922,
+    "confusion_matrix": [
+      [
+        478,
+        999
+      ],
+      [
+        134,
+        1121
+      ]
+    ],
+    "sample_count": 2732,
+    "threshold": 0.32770875096321106,
+    "model": "UniXcoder fine-tuned",
+    "operating_point": "threshold selected on validation"
+  },
+  {
+    "accuracy": 0.6303074670571011,
+    "precision": 0.5792880258899676,
+    "recall": 0.7131474103585658,
+    "f1": 0.6392857142857142,
+    "roc_auc": 0.694552865046247,
+    "pr_auc": 0.6692346407357922,
+    "confusion_matrix": [
+      [
+        827,
+        650
+      ],
+      [
+        360,
+        895
+      ]
+    ],
+    "sample_count": 2732,
+    "threshold": 0.5,
+    "model": "UniXcoder fine-tuned",
+    "operating_point": "threshold 0.5"
+  },
+  {
+    "accuracy": 0.6013909224011713,
+    "precision": 0.5413346613545816,
+    "recall": 0.8661354581673307,
+    "f1": 0.6662580447441006,
+    "roc_auc": 0.6812201431241857,
+    "pr_auc": 0.6345076596125413,
+    "confusion_matrix": [
+      [
+        556,
+        921
+      ],
+      [
+        168,
+        1087
+      ]
+    ],
+    "sample_count": 2732,
+    "threshold": 0.3687146893563027,
+    "model": "TF-IDF + Logistic Regression",
+    "operating_point": "threshold selected on validation"
+  },
+  {
+    "accuracy": 0.6116398243045388,
+    "precision": 0.5858407079646017,
+    "recall": 0.5274900398406375,
+    "f1": 0.5551362683438155,
+    "roc_auc": 0.6812201431241857,
+    "pr_auc": 0.6345076596125413,
+    "confusion_matrix": [
+      [
+        1009,
+        468
+      ],
+      [
+        593,
+        662
+      ]
+    ],
+    "sample_count": 2732,
+    "threshold": 0.5,
+    "model": "TF-IDF + Logistic Regression",
+    "operating_point": "threshold 0.5"
+  }
+]

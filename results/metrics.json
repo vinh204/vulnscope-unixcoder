@@ -1,11 +1,30 @@
 {
-  "sample_count": 500,
-  "accuracy": 0.504,
-  "precision": 0.486013986013986,
-  "recall": 0.5791666666666667,
-  "f1": 0.5285171102661597,
-  "confusion_matrix": [[113, 147], [101, 139]],
-  "threshold": 0.44,
-  "roc_auc": 0.5277483974358974,
-  "pr_auc": 0.5291394242492928
+  "accuracy": 0.46669106881405564,
+  "precision": 0.46234153616703955,
+  "recall": 0.9880478087649402,
+  "f1": 0.6299212598425197,
+  "confusion_matrix": [
+    [
+      35,
+      1442
+    ],
+    [
+      15,
+      1240
+    ]
+  ],
+  "threshold": 0.19114550948143,
+  "roc_auc": 0.5536141149686966,
+  "pr_auc": 0.5030361078637903,
+  "sample_count": 2732,
+  "split": "Devign CodeXGLUE test",
+  "threshold_selected_on": "Devign CodeXGLUE validation",
+  "validation_best_f1_threshold": 0.19114550948143,
+  "validation_best_f1": 0.6059979317476732,
+  "validation_sample_count": 2732,
+  "threshold_metric": "F1",
+  "model_name": "microsoft/unixcoder-base",
+  "checkpoint_revision": "e8c7be3e075f261b8dee20196795b634e3d36f2a",
+  "block_size": 128,
+  "device": "CPU"
 }

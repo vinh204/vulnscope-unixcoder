@@ -14,7 +14,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHECKPOINT = Path(os.getenv(
-    "CHECKPOINT_PATH", ROOT / "outputs" / "checkpoint-best-f1" / "model.bin"
+    "CHECKPOINT_PATH", ROOT / "outputs" / "devign_full_ft_cpu" / "checkpoint-best-f1" / "model.bin"
 ))
 DEFAULT_METADATA = DEFAULT_CHECKPOINT.with_name("metadata.json")
 MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/unixcoder-base")
@@ -26,6 +26,7 @@ CHECKPOINT_REVISION = os.getenv(
     "CHECKPOINT_REVISION", "e8c7be3e075f261b8dee20196795b634e3d36f2a"
 )
 APP_ENV = os.getenv("APP_ENV", "production").lower()
+MODEL_PROFILE = os.getenv("MODEL_PROFILE", "")
 EXAMPLES = {
     "Buffer overflow": '''void copy_input(const char *input) {
     char buffer[16];
@@ -171,7 +172,6 @@ def get_prediction(code, checkpoint, block_size, demo_mode):
 def show_result(result, threshold):
     probability = float(result["vulnerable_probability"])
     predicted = probability >= threshold
-    confidence = probability if predicted else 1 - probability
     accent = "#fb7185" if predicted else "#34d399"
     title = "Có dấu hiệu lỗ hổng" if predicted else "Chưa phát hiện nguy cơ cao"
     detail = (
@@ -182,10 +182,11 @@ def show_result(result, threshold):
         f'{title}</h3><p>{detail}</p></div>', unsafe_allow_html=True,
     )
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Xác suất lỗ hổng", f"{probability:.1%}")
-    c2.metric("Độ tin cậy", f"{confidence:.1%}")
+    c1.metric("Điểm số lỗi theo mô hình", f"{probability:.1%}")
+    c2.metric("Ngưỡng cảnh báo", f"{threshold:.1%}")
     c3.metric("Token phân tích", f"{int(result['token_count']):,}")
     c4.metric("Độ trễ", f"{float(result['elapsed_ms']):.0f} ms")
+    st.caption("Điểm số là đầu ra của mô hình, chưa được hiệu chỉnh thành xác suất rủi ro thực tế.")
     if result["truncated"]:
         st.warning("Đầu vào đã bị cắt; kết quả có thể bỏ sót phần code quan trọng.")
 
@@ -281,16 +282,22 @@ def comparison_page(checkpoint, block_size, threshold, demo_mode):
             st.error(str(exc))
 
 
-def dashboard_page():
+def dashboard_page(full_finetune_active: bool):
     st.subheader("Dashboard thực nghiệm")
-    metrics_path = ROOT / "results" / "metrics.json"
-    predictions_path = ROOT / "results" / "predictions.csv"
+    uses_full_finetuned_checkpoint = full_finetune_active
+    if uses_full_finetuned_checkpoint:
+        run_dir = ROOT / "results" / "devign_full_ft_cpu_final"
+        metrics_path = run_dir / "test_metrics.json"
+        predictions_path = run_dir / "test_predictions.csv"
+    else:
+        metrics_path = ROOT / "results" / "metrics.json"
+        predictions_path = ROOT / "results" / "predictions.csv"
     if not metrics_path.exists():
         st.warning("Chưa có kết quả thật. Chạy evaluate.py để tạo results/metrics.json và predictions.csv.")
         st.code(
-            "python code/evaluate.py --data data/devign/test.txt "
+            "python code/evaluate.py --data data/devign/test.jsonl "
             "--checkpoint outputs/checkpoint-best-f1/model.bin "
-            "--block-size 128 --threshold 0.44 --head 500"
+            "--block-size 128 --threshold 0.19114550948143"
         )
         return
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -299,10 +306,16 @@ def dashboard_page():
         frame = pd.read_csv(predictions_path)
         sample_count = len(frame)
     scope = f" trên {sample_count:,} mẫu test" if sample_count is not None else ""
-    st.info(
-        f"Baseline checkpoint{scope}: encoder đóng băng, huấn luyện 3 epoch trên 2.000 mẫu. "
-        "Các số liệu được đọc từ artifact đánh giá thật và chưa phải kết quả cuối của đồ án."
-    )
+    if uses_full_finetuned_checkpoint:
+        st.info(
+            f"UniXcoder fine-tune toàn bộ encoder trên 21.854 mẫu, 3 epoch, block size 512{scope}. "
+            f"Ngưỡng {metrics.get('threshold', 0.3277):.4f} được chọn trên validation rồi khóa trước khi đánh giá test."
+        )
+    else:
+        st.info(
+            f"Checkpoint demo{scope}: kết quả phụ thuộc checkpoint đang cấu hình. "
+            "Ngưỡng đánh giá được chọn trên validation trước khi chấm test."
+        )
     cols = st.columns(6)
     for column, key in zip(cols, ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]):
         value = metrics.get(key)
@@ -319,6 +332,24 @@ def dashboard_page():
     if predictions_path.exists():
         st.subheader("Dự đoán chi tiết")
         st.dataframe(frame, use_container_width=True, hide_index=True)
+    if uses_full_finetuned_checkpoint:
+        comparison_path = ROOT / "results" / "model_comparison.json"
+        audit_path = ROOT / "results" / "devign_baseline" / "baseline_metrics.json"
+        if comparison_path.exists():
+            comparison = pd.DataFrame(json.loads(comparison_path.read_text(encoding="utf-8")))
+            selected = comparison[comparison["operating_point"] == "validation-F1 threshold"]
+            st.subheader("So sánh với baseline trên cùng tập test")
+            display = selected[["model", "threshold", "accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]].copy()
+            st.dataframe(display, use_container_width=True, hide_index=True)
+            st.caption("TF-IDF + Logistic Regression là baseline từ vựng. Ngưỡng của mỗi mô hình được chọn riêng trên validation.")
+        if audit_path.exists():
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))["split_audit"]
+            test_train = audit["cross_split_overlap"]["train__test"]["exact_function_hash_overlap"]
+            test_valid = audit["cross_split_overlap"]["validation__test"]["exact_function_hash_overlap"]
+            st.warning(
+                f"Kiểm tra dữ liệu phát hiện {test_train} hàm trùng chính xác giữa train/test và "
+                f"{test_valid} hàm trùng giữa validation/test. Xem split_audit trong kết quả để biết giới hạn này."
+            )
 
 
 def main():
@@ -330,6 +361,10 @@ def main():
     except Exception as exc:
         checkpoint = str(DEFAULT_CHECKPOINT)
         checkpoint_error = f"{type(exc).__name__}: {exc}"
+    full_finetune_active = (
+        MODEL_PROFILE.lower() in {"full_finetuned", "full_finetune"}
+        or (not MODEL_PROFILE and "devign_full_ft_cpu" in str(Path(checkpoint)))
+    )
     with st.sidebar:
         st.markdown(
             f'<div class="vs-sidebar-brand"><div class="vs-sidebar-logo">{LOGO_SVG}</div>'
@@ -344,12 +379,15 @@ def main():
             checkpoint = st.text_input("Checkpoint", checkpoint)
         with st.expander("Cấu hình nâng cao"):
             block_size = st.select_slider(
-                "Độ dài đầu vào (token)", [128, 256, 512], value=128,
-                help="Đầu vào dài hơn giới hạn sẽ bị cắt. Checkpoint demo được huấn luyện với 128 token.",
+                "Độ dài đầu vào (token)", [128, 256, 512], value=512 if full_finetune_active else 128,
+                help=("Đầu vào dài hơn giới hạn sẽ bị cắt. Checkpoint full fine-tuning dùng 512 token."
+                      if full_finetune_active else "Đầu vào dài hơn giới hạn sẽ bị cắt. Checkpoint demo công khai dùng 128 token."),
             )
             threshold = st.slider(
-                "Ngưỡng cảnh báo", 0.05, 0.95, 0.44, 0.01,
-                help="Được chọn trên validation set; xác suất từ ngưỡng này trở lên được cảnh báo.",
+                "Ngưỡng cảnh báo", 0.05, 0.95,
+                0.32770875 if full_finetune_active else 0.1911455, 0.000001,
+                help=("Ngưỡng 0,32770875 được chọn trên validation cho checkpoint full fine-tuning."
+                      if full_finetune_active else "Ngưỡng 0,1911455 được chọn trên validation cho checkpoint demo công khai."),
             )
         checkpoint_exists = Path(checkpoint).is_file()
         if APP_ENV == "production":
@@ -362,8 +400,8 @@ def main():
             demo_mode = st.toggle("Chế độ minh họa", value=not checkpoint_exists)
         if demo_mode:
             st.warning("Kết quả đang dùng quy tắc minh họa, không phải UniXcoder và không được dùng trong báo cáo.")
-        elif Path(checkpoint).resolve() == DEFAULT_CHECKPOINT.resolve():
-            st.info("Checkpoint CPU demo: 2.000 mẫu huấn luyện, encoder đóng băng, 3 epoch, block size 128.")
+        elif full_finetune_active:
+            st.info("Checkpoint CPU fine-tuned: 21.854 mẫu train, encoder được cập nhật, 3 epoch, block size 512.")
         st.divider()
         st.caption("Công cụ hỗ trợ sàng lọc, không thay thế kiểm thử bảo mật chuyên sâu.")
     hero()
@@ -372,7 +410,7 @@ def main():
     elif page == "So sánh bản vá":
         comparison_page(checkpoint, block_size, threshold, demo_mode)
     else:
-        dashboard_page()
+        dashboard_page(full_finetune_active)
 
 
 if __name__ == "__main__":

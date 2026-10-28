@@ -11,4 +11,5 @@ models
 *.pt
 *.pth
 *.csv
+!results/devign_full_ft_cpu_final/test_predictions.csv
 *.jsonl
