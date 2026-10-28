@@ -2,6 +2,8 @@
 
 Demo đồ án phát hiện lỗ hổng ở mức hàm C/C++ bằng UniXcoder. Hệ thống hỗ trợ dự đoán nhị phân, giải thích bằng token occlusion, so sánh trước/sau bản vá và dashboard kết quả thực nghiệm.
 
+**Demo trực tiếp:** [vulnscope-unixcoder.streamlit.app](https://vulnscope-unixcoder.streamlit.app/)
+
 ## Cấu trúc dự án
 
 ```text
