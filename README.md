@@ -8,13 +8,11 @@ Demo đồ án phát hiện lỗ hổng ở mức hàm C/C++ bằng UniXcoder. H
 code/       mã ứng dụng, huấn luyện, suy luận và đánh giá
 data/       bộ dữ liệu Devign dùng cho thí nghiệm
 outputs/    checkpoint và cấu hình huấn luyện
-results/    metric, dự đoán, so sánh baseline và kiểm tra dữ liệu
-docs/       chương báo cáo và hình minh họa
-tools/      script tạo báo cáo và hình
+results/    metric và dự đoán cần cho demo
 tests/      kiểm thử tự động
 ```
 
-`.venv/` là môi trường Python cục bộ; không cần đưa vào Git. Các thư mục xem trước PDF/ảnh được tạo khi rà soát tài liệu có thể xóa và tạo lại.
+`.venv/`, dữ liệu, checkpoint và tài liệu báo cáo được giữ cục bộ, không đưa vào repository. Các kết quả được giữ trong Git chỉ gồm artifact cần để chạy dashboard.
 
 ## Cài đặt
 

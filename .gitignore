@@ -5,23 +5,20 @@ outputs/
 results/*
 !results/metrics.json
 !results/model_comparison.json
-!results/devign_split_audit.json
-!results/duplicate_sensitivity.json
 !results/devign_baseline/
 results/devign_baseline/*
 !results/devign_baseline/baseline_metrics.json
 !results/devign_full_ft_cpu_final/
 results/devign_full_ft_cpu_final/*
 !results/devign_full_ft_cpu_final/test_metrics.json
-!results/devign_full_ft_cpu_final/validation_metrics.json
 !results/devign_full_ft_cpu_final/test_predictions.csv
-!results/devign_full_ft_cpu_final/error_analysis.json
 .env
 .streamlit/secrets.toml
 .cache/
 models/
-docs/rendered*/
-docs/compact-render*/
+docs/
+tools/
+data/
 
 # Downloaded/generated Devign data (keep local; do not commit large files).
 data/devign/function.json
