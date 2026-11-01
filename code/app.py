@@ -13,20 +13,33 @@ import pandas as pd
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHECKPOINT = Path(os.getenv(
+
+
+def config_value(name: str, default=None):
+    """Read app configuration from environment variables or Streamlit secrets."""
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    try:
+        return st.secrets.get(name, default)
+    except (FileNotFoundError, KeyError):
+        return default
+
+
+DEFAULT_CHECKPOINT = Path(config_value(
     "CHECKPOINT_PATH", ROOT / "outputs" / "devign_full_ft_cpu" / "checkpoint-best-f1" / "model.bin"
 ))
 DEFAULT_METADATA = DEFAULT_CHECKPOINT.with_name("metadata.json")
-MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/unixcoder-base")
-CHECKPOINT_REPO_ID = os.getenv(
+MODEL_NAME = config_value("MODEL_NAME", "microsoft/unixcoder-base")
+CHECKPOINT_REPO_ID = config_value(
     "CHECKPOINT_REPO_ID", "vinh204/vulnscope-unixcoder-devign"
 )
-CHECKPOINT_FILENAME = os.getenv("CHECKPOINT_FILENAME", "model.bin")
-CHECKPOINT_REVISION = os.getenv(
+CHECKPOINT_FILENAME = config_value("CHECKPOINT_FILENAME", "model.bin")
+CHECKPOINT_REVISION = config_value(
     "CHECKPOINT_REVISION", "e8c7be3e075f261b8dee20196795b634e3d36f2a"
 )
-APP_ENV = os.getenv("APP_ENV", "production").lower()
-MODEL_PROFILE = os.getenv("MODEL_PROFILE", "")
+APP_ENV = config_value("APP_ENV", "production").lower()
+MODEL_PROFILE = config_value("MODEL_PROFILE", "")
 EXAMPLES = {
     "Buffer overflow": '''void copy_input(const char *input) {
     char buffer[16];
@@ -158,7 +171,7 @@ def resolve_checkpoint(configured_path: str) -> str:
         repo_id=CHECKPOINT_REPO_ID,
         filename=CHECKPOINT_FILENAME,
         revision=CHECKPOINT_REVISION,
-        token=os.getenv("HF_TOKEN"),
+        token=config_value("HF_TOKEN"),
     )
 
 
