@@ -24,25 +24,22 @@ from __future__ import absolute_import, division, print_function
 import argparse
 import logging
 import os
-import pandas as pd
 import random
 import json
 import re
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 import torch
 import numpy as np
-import pickle
+import tempfile
+from pathlib import Path
 
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-import tqdm
-from tqdm import tqdm
 
-from model import *
-from data_utils import load_records
+from model import Model
+from data_utils import load_records, validate_code_records
 from torch.optim import AdamW
 from transformers import (get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer)
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +84,13 @@ class TextDataset(Dataset):
             partition = m.group(1)
 
         self.examples = []
-        data = []
         count = 0
-        for js in load_records(file_path):
-            data.append(js)
+        records = validate_code_records(load_records(file_path), file_path)
+        for js in records:
             count += 1
             if args.head is not None and count >= args.head:
+                self.examples.append(convert_examples_to_features(js, tokenizer, args))
                 break
-        for js in data:
             self.examples.append(convert_examples_to_features(js, tokenizer, args))
 
         if partition == 'train':
@@ -134,6 +130,69 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
 
 
+def _rng_state():
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state):
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if torch.cuda.is_available() and "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _atomic_torch_save(value, destination):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, suffix=".tmp", delete=False) as temp:
+        temp_path = Path(temp.name)
+    try:
+        torch.save(value, temp_path)
+        os.replace(temp_path, destination)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def save_last_checkpoint(args, model, optimizer, scheduler, epoch, global_step, best_perf):
+    checkpoint_dir = Path(args.output_dir) / "checkpoint-last"
+    state = {
+        "model": (model.module if hasattr(model, "module") else model).state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "epoch": epoch,
+        "global_step": global_step,
+        "best_perf": best_perf,
+        "rng_state": _rng_state(),
+        "training_args": {
+            "model_name_or_path": args.model_name_or_path,
+            "train_data_file": str(Path(args.train_data_file).resolve()),
+            "eval_data_file": str(Path(args.eval_data_file).resolve()),
+            "block_size": args.block_size,
+            "train_batch_size": args.train_batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "adam_epsilon": args.adam_epsilon,
+            "max_grad_norm": args.max_grad_norm,
+            "num_train_epochs": args.num_train_epochs,
+            "seed": args.seed,
+            "validation_metric": args.validation_metric,
+            "head": args.head,
+            "tokenize_ast_token": args.tokenize_ast_token,
+            "freeze_encoder_and_embeddings": args.freeze_encoder_and_embeddings,
+        },
+    }
+    _atomic_torch_save(state, checkpoint_dir / "training_state.pt")
+
+
 def train(args, train_dataset, model, tokenizer):
     """ Train the model """
     train_sampler = RandomSampler(train_dataset)
@@ -166,10 +225,48 @@ def train(args, train_dataset, model, tokenizer):
     logger.info("  Effective train batch size = %d", args.train_batch_size * args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", args.max_steps)
 
-    losses, best_perf = [], 0
+    losses, best_perf, global_step, start_epoch = [], float("-inf"), 0, 0
+    if args.resume_from_checkpoint:
+        resume_path = Path(args.resume_from_checkpoint)
+        state_path = resume_path / "training_state.pt" if resume_path.is_dir() else resume_path
+        if not state_path.is_file():
+            raise FileNotFoundError(f"Resume state not found: {state_path}")
+        state = torch.load(state_path, map_location="cpu", weights_only=False)
+        expected = state["training_args"]
+        current = {
+            "model_name_or_path": args.model_name_or_path,
+            "train_data_file": str(Path(args.train_data_file).resolve()),
+            "eval_data_file": str(Path(args.eval_data_file).resolve()),
+            "block_size": args.block_size,
+            "train_batch_size": args.train_batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "adam_epsilon": args.adam_epsilon,
+            "max_grad_norm": args.max_grad_norm,
+            "num_train_epochs": args.num_train_epochs,
+            "seed": args.seed,
+            "validation_metric": args.validation_metric,
+            "head": args.head,
+            "tokenize_ast_token": args.tokenize_ast_token,
+            "freeze_encoder_and_embeddings": args.freeze_encoder_and_embeddings,
+        }
+        mismatches = [key for key, value in expected.items() if current.get(key) != value]
+        if mismatches:
+            raise ValueError("Resume settings differ from checkpoint: " + ", ".join(mismatches))
+        model_to_load = model.module if hasattr(model, "module") else model
+        model_to_load.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        scheduler.load_state_dict(state["scheduler"])
+        start_epoch = int(state["epoch"])
+        global_step = int(state["global_step"])
+        best_perf = float(state["best_perf"])
+        _restore_rng_state(state["rng_state"])
+        logger.info("Resuming at epoch %d, optimizer step %d", start_epoch + 1, global_step)
 
     model.zero_grad()
-    for idx in range(args.num_train_epochs):
+    for idx in range(start_epoch, args.num_train_epochs):
+        model.train()
         for step, batch in enumerate(train_dataloader):
             inputs = batch[0].to(args.device)
             labels = batch[1].to(args.device)
@@ -179,11 +276,14 @@ def train(args, train_dataset, model, tokenizer):
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
             raw_loss = loss.item()
-            if args.gradient_accumulation_steps > 1:
-                loss = loss / args.gradient_accumulation_steps
+            accumulation_window_start = (step // args.gradient_accumulation_steps) * args.gradient_accumulation_steps
+            accumulation_window_size = min(
+                args.gradient_accumulation_steps,
+                len(train_dataloader) - accumulation_window_start,
+            )
+            loss = loss / accumulation_window_size
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
             losses.append(raw_loss)
 
@@ -192,9 +292,11 @@ def train(args, train_dataset, model, tokenizer):
 
             if ((step + 1) % args.gradient_accumulation_steps == 0
                     or (step + 1) == len(train_dataloader)):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
+                global_step += 1
 
         results = evaluate(args, model, tokenizer, args.eval_data_file)
         for key, value in results.items():
@@ -212,8 +314,11 @@ def train(args, train_dataset, model, tokenizer):
                 os.makedirs(output_dir)
             output_dir = os.path.join(output_dir, '{}'.format('model.bin'))
             model_to_save = model.module if hasattr(model, 'module') else model
-            torch.save(model_to_save.state_dict(), output_dir)
+            _atomic_torch_save(model_to_save.state_dict(), output_dir)
             logger.info("Saving model checkpoint to %s", output_dir)
+
+        save_last_checkpoint(args, model, optimizer, scheduler, idx + 1, global_step, best_perf)
+        logger.info("Saved resumable checkpoint after epoch %d", idx + 1)
 
 
 def evaluate(args, model, tokenizer, data_file):
@@ -263,86 +368,17 @@ def evaluate(args, model, tokenizer, data_file):
     return result
 
 
-def test(args, model, tokenizer, data_file):
-    """ Evaluate the model """
-    eval_dataset = TextDataset(tokenizer, args, data_file)
-    eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=0)
-
-    eval_output_dir = args.output_dir
-    if not os.path.exists(eval_output_dir):
-        os.makedirs(eval_output_dir)
-
-    # Eval!
-    logger.info("***** Running evaluation *****")
-    logger.info("  Num examples = %d", len(eval_dataset))
-    logger.info("  Batch size = %d", args.eval_batch_size)
-    logger.info("  Gradient accumulation steps = %d", args.gradient_accumulation_steps)
-    logger.info("  Effective batch size = %d", args.eval_batch_size * args.gradient_accumulation_steps)
-    eval_loss = 0.0
-    nb_eval_steps = 0
-    model.eval()
-    labels = []
-    probs = []
-    for batch in eval_dataloader:
-        inputs = batch[0].to(args.device)
-        label = batch[1].to(args.device)
-        with torch.no_grad():
-            loss, prob = model(input_ids=inputs, labels=label)
-            eval_loss += loss.mean().item()
-            labels.append(label.cpu().numpy())
-            probs.append(prob.cpu().numpy())
-
-        nb_eval_steps += 1
-    labels = np.concatenate(labels, 0)
-    probs = np.concatenate(probs, 0)
-    preds = np.argmax(probs, axis=1)
-
-    eval_loss = eval_loss / nb_eval_steps
-    print(labels[:20])
-    print(preds[:20])
-
-    with open(data_file, 'r') as json_file:
-        data = json.load(json_file)
-        cwe_list = [item['CWE'] for item in data]  # 假设每个项目都有一个 'CWE' 键
-
-    # 确保 CWE 列表的长度与其他数据相匹配
-    if len(cwe_list) != len(labels):
-        raise ValueError("CWE 列表的长度与标签的长度不匹配")
-
-    if not os.path.exists(args.csv_path):
-        with open(args.csv_path, 'w') as f:
-            f.write('CWE,Label,Prediction,Prob\n')
-
-    rows = pd.DataFrame({'CWE': cwe_list, 'Label': labels, 'Prediction': preds,
-                         'SafeProb': probs[:, 0], 'VulnerableProb': probs[:, 1]})
-    rows.to_csv(args.csv_path, index=False)
-    result = {
-        "eval_acc": accuracy_score(labels, preds),
-        "eval_precision": precision_score(labels, preds, zero_division=0),
-        "eval_recall": recall_score(labels, preds, zero_division=0),
-        "eval_f1": f1_score(labels, preds, zero_division=0),
-        "eval_roc_auc": roc_auc_score(labels, probs[:, 1]) if len(np.unique(labels)) == 2 else 0.0,
-        "eval_pr_auc": average_precision_score(labels, probs[:, 1]) if len(np.unique(labels)) == 2 else 0.0,
-    }
-    return result
-
-
 def main():
     parser = argparse.ArgumentParser()
 
     ## Required parameters
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
-    parser.add_argument("--result_dir", default=os.path.join("results"), type=str,
-                        help="To store the result in per epoch")
     ## Other parameters
     parser.add_argument("--train_data_file", default=None, type=str,
                         help="The input training data file (a jsonl file).")
     parser.add_argument("--eval_data_file", default=None, type=str,
                         help="An optional input evaluation data file to evaluate the perplexity on (a jsonl file).")
-    parser.add_argument("--test_data_file", default=None, type=str,
-                        help="An optional input test data file to evaluate the perplexity on (a jsonl file).")
     parser.add_argument("--model_name_or_path", default="microsoft/unixcoder-base", type=str,
                         help="The model checkpoint for weights initialization.")
 
@@ -352,10 +388,8 @@ def main():
                         help="Whether to run training.")
     parser.add_argument("--do_eval", action='store_true',
                         help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_test", action='store_true',
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_attribution", action='store_true',
-                        help="Whether to run attribution")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Resume training from a checkpoint-last directory; checkpoints are saved after each epoch.")
     parser.add_argument("--train_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--eval_batch_size", default=16, type=int,
@@ -384,16 +418,30 @@ def main():
                         help="dataset key for index")
     parser.add_argument('--head', type=int,
                         help="number of dataset examples to cut off")
-    parser.add_argument("--csv_path", default='results.csv', help="Path to save the CSV results.")
     parser.add_argument('--freeze_encoder_and_embeddings', action='store_true',
                         help="whether to freeze the model's encoder and embeddings layers")
     parser.add_argument('--tokenize_ast_token', type=int, default=0)
-    parser.add_argument('--node', type=str, default='node')
-    parser.add_argument('--dataset', type=str, default="Devign")
-    parser.add_argument('--model_name', type=str, default="causal_vanilla")
 
     # print arguments
     args = parser.parse_args()
+    if not (args.do_train or args.do_eval):
+        parser.error("Select at least one operation: --do_train and/or --do_eval")
+    if args.resume_from_checkpoint and not args.do_train:
+        parser.error("--resume_from_checkpoint requires --do_train")
+    if args.do_train and (not args.train_data_file or not args.eval_data_file):
+        parser.error("--do_train requires --train_data_file and --eval_data_file")
+    if args.do_eval and not args.eval_data_file:
+        parser.error("--do_eval requires --eval_data_file")
+    if args.block_size < 5 or args.block_size > 512:
+        parser.error("--block_size must be between 5 and 512 for microsoft/unixcoder-base")
+    if args.train_batch_size < 1 or args.eval_batch_size < 1 or args.gradient_accumulation_steps < 1:
+        parser.error("Batch sizes and --gradient_accumulation_steps must be positive")
+    if args.num_train_epochs < 1 or args.learning_rate <= 0 or args.max_grad_norm <= 0:
+        parser.error("Epochs, learning rate and max gradient norm must be positive")
+    if args.head is not None and args.head < 1:
+        parser.error("--head must be positive when supplied")
+    if args.validation_metric not in {"f1", "acc", "precision", "recall", "roc_auc", "pr_auc"}:
+        parser.error("Unsupported --validation_metric")
     # set log
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                         datefmt='%m/%d/%Y %H:%M:%S', level=logging.INFO)
@@ -405,8 +453,29 @@ def main():
 
     # Set seed
     set_seed(args.seed)
-    if not os.path.exists(args.result_dir):
-        os.makedirs(args.result_dir)
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    training_config = {
+        "model_name_or_path": args.model_name_or_path,
+        "train_data_file": str(Path(args.train_data_file).resolve()) if args.train_data_file else None,
+        "eval_data_file": str(Path(args.eval_data_file).resolve()) if args.eval_data_file else None,
+        "block_size": args.block_size,
+        "train_batch_size": args.train_batch_size,
+        "eval_batch_size": args.eval_batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "learning_rate": args.learning_rate,
+        "weight_decay": args.weight_decay,
+        "adam_epsilon": args.adam_epsilon,
+        "max_grad_norm": args.max_grad_norm,
+        "num_train_epochs": args.num_train_epochs,
+        "seed": args.seed,
+        "validation_metric": args.validation_metric,
+        "device": str(args.device),
+        "gpu_count": args.n_gpu,
+        "resume_from_checkpoint": args.resume_from_checkpoint,
+    }
+    (Path(args.output_dir) / "training_config.json").write_text(
+        json.dumps(training_config, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     # build model
     tokenizer = RobertaTokenizer.from_pretrained(args.model_name_or_path)
     config = RobertaConfig.from_pretrained(args.model_name_or_path)
@@ -437,16 +506,6 @@ def main():
         logger.info("***** Eval results *****")
         for key in sorted(result.keys()):
             logger.info("  %s = %s", key, str(round(result[key] * 100 if "map" in key else result[key], 4)))
-
-    if args.do_test:
-        output_dir = os.path.join(args.output_dir, f'checkpoint-best-{args.validation_metric}/model.bin')
-        model_to_load = model.module if hasattr(model, 'module') else model
-        model_to_load.load_state_dict(torch.load(output_dir, map_location=args.device, weights_only=True))
-        result = test(args, model, tokenizer, args.test_data_file)
-        logger.info("***** Test results *****")
-        for key in sorted(result.keys()):
-            logger.info("  %s = %s", key, str(round(result[key] * 100 if "map" in key else result[key], 4)))
-
 
 if __name__ == "__main__":
     main()

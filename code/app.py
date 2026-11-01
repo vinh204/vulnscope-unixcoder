@@ -29,7 +29,6 @@ def config_value(name: str, default=None):
 DEFAULT_CHECKPOINT = Path(config_value(
     "CHECKPOINT_PATH", ROOT / "outputs" / "devign_full_ft_cpu" / "checkpoint-best-f1" / "model.bin"
 ))
-DEFAULT_METADATA = DEFAULT_CHECKPOINT.with_name("metadata.json")
 MODEL_NAME = config_value("MODEL_NAME", "microsoft/unixcoder-base")
 CHECKPOINT_REPO_ID = config_value(
     "CHECKPOINT_REPO_ID", "vinh204/vulnscope-unixcoder-devign"
@@ -167,18 +166,42 @@ def resolve_checkpoint(configured_path: str) -> str:
 
     from huggingface_hub import hf_hub_download
 
-    return hf_hub_download(
+    checkpoint_path = hf_hub_download(
         repo_id=CHECKPOINT_REPO_ID,
         filename=CHECKPOINT_FILENAME,
         revision=CHECKPOINT_REVISION,
         token=config_value("HF_TOKEN"),
     )
+    try:
+        hf_hub_download(
+            repo_id=CHECKPOINT_REPO_ID,
+            filename="metadata.json",
+            revision=CHECKPOINT_REVISION,
+            token=config_value("HF_TOKEN"),
+        )
+    except Exception:
+        # Older checkpoint repositories may not yet contain deployment metadata.
+        pass
+    return checkpoint_path
 
 
-def get_prediction(code, checkpoint, block_size, demo_mode):
+def load_checkpoint_metadata(checkpoint: str) -> dict:
+    """Load the evaluation settings saved beside a checkpoint, if available."""
+    metadata_path = Path(checkpoint).with_name("metadata.json")
+    if not metadata_path.is_file():
+        return {}
+    try:
+        value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        st.warning(f"Không đọc được metadata của checkpoint: {exc}")
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def get_prediction(code, checkpoint, block_size, demo_mode, model_name):
     if demo_mode:
         return illustrative_prediction(code), None
-    predictor = load_predictor(checkpoint, block_size, MODEL_NAME)
+    predictor = load_predictor(checkpoint, block_size, model_name)
     return predictor.predict(code).to_dict(), predictor
 
 
@@ -204,7 +227,7 @@ def show_result(result, threshold):
         st.warning("Đầu vào đã bị cắt; kết quả có thể bỏ sót phần code quan trọng.")
 
 
-def analyzer_page(checkpoint, block_size, threshold, demo_mode):
+def analyzer_page(checkpoint, block_size, threshold, demo_mode, model_name):
     st.subheader("Phân tích mã nguồn")
     st.caption("Dán một hàm C/C++ hoặc chọn ví dụ để mô hình ước lượng rủi ro.")
     left, right = st.columns([1, 1])
@@ -217,7 +240,7 @@ def analyzer_page(checkpoint, block_size, threshold, demo_mode):
         predictor = None
         try:
             with st.spinner("Đang phân tích..."):
-                result, predictor = get_prediction(code, checkpoint, block_size, demo_mode)
+                result, predictor = get_prediction(code, checkpoint, block_size, demo_mode, model_name)
         except Exception as exc:
             st.error(f"Không thể chạy mô hình: {type(exc).__name__}: {exc}")
 
@@ -231,6 +254,7 @@ def analyzer_page(checkpoint, block_size, threshold, demo_mode):
                 st.session_state["explain_code"] = code
                 st.session_state["explain_checkpoint"] = checkpoint
                 st.session_state["explain_block_size"] = block_size
+                st.session_state["explain_model_name"] = model_name
             else:
                 st.info("Chế độ minh họa không tạo giải thích mô hình. Hãy chọn checkpoint thật để bảo vệ.")
 
@@ -247,10 +271,11 @@ def analyzer_page(checkpoint, block_size, threshold, demo_mode):
 
     can_explain = (not demo_mode and st.session_state.get("explain_code") == code and
                    st.session_state.get("explain_checkpoint") == checkpoint and
-                   st.session_state.get("explain_block_size") == block_size)
+                   st.session_state.get("explain_block_size") == block_size and
+                   st.session_state.get("explain_model_name") == model_name)
     if can_explain and st.button("Giải thích token", use_container_width=True):
         try:
-            predictor = load_predictor(checkpoint, block_size, MODEL_NAME)
+            predictor = load_predictor(checkpoint, block_size, model_name)
             with st.spinner("Đang che lần lượt từng token để kiểm chứng..."):
                 explanation = predictor.explain(code)
             # Force primitive values; this avoids dataframe parsers interpreting token text.
@@ -269,7 +294,7 @@ def analyzer_page(checkpoint, block_size, threshold, demo_mode):
             )
 
 
-def comparison_page(checkpoint, block_size, threshold, demo_mode):
+def comparison_page(checkpoint, block_size, threshold, demo_mode, model_name):
     st.subheader("So sánh trước và sau bản vá")
     st.caption("Đo mức thay đổi rủi ro sau khi áp dụng bản vá, dùng cùng một checkpoint và ngưỡng.")
     left, right = st.columns(2)
@@ -277,8 +302,8 @@ def comparison_page(checkpoint, block_size, threshold, demo_mode):
     after = right.text_area("Sau bản vá", SAFE_PATCH, height=260)
     if st.button("So sánh", type="primary", use_container_width=True):
         try:
-            before_result, _ = get_prediction(before, checkpoint, block_size, demo_mode)
-            after_result, _ = get_prediction(after, checkpoint, block_size, demo_mode)
+            before_result, _ = get_prediction(before, checkpoint, block_size, demo_mode, model_name)
+            after_result, _ = get_prediction(after, checkpoint, block_size, demo_mode, model_name)
             p_before, p_after = before_result["vulnerable_probability"], after_result["vulnerable_probability"]
             c1, c2, c3 = st.columns(3)
             c1.metric("Trước vá", f"{p_before:.1%}")
@@ -295,7 +320,7 @@ def comparison_page(checkpoint, block_size, threshold, demo_mode):
             st.error(str(exc))
 
 
-def dashboard_page(full_finetune_active: bool):
+def dashboard_page(full_finetune_active: bool, checkpoint_metadata: dict):
     st.subheader("Dashboard thực nghiệm")
     uses_full_finetuned_checkpoint = full_finetune_active
     if uses_full_finetuned_checkpoint:
@@ -314,14 +339,37 @@ def dashboard_page(full_finetune_active: bool):
         )
         return
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    expected_hash = checkpoint_metadata.get("checkpoint_sha256")
+    if uses_full_finetuned_checkpoint:
+        if not expected_hash:
+            st.warning("Checkpoint thiếu metadata có SHA-256 nên không thể xác nhận metric test có sẵn thuộc model này.")
+            return
+        if metrics.get("checkpoint_sha256") != expected_hash:
+            st.warning(
+                "Checkpoint hiện tại khác checkpoint dùng để tạo metric test có sẵn. "
+                "Dashboard không hiển thị các metric đó như thể chúng thuộc model hiện tại. "
+                "Hãy đánh giá checkpoint này và cập nhật artifact kết quả trước khi đối chiếu."
+            )
+            return
     sample_count = metrics.get("sample_count")
     if predictions_path.exists():
         frame = pd.read_csv(predictions_path)
         sample_count = len(frame)
     scope = f" trên {sample_count:,} mẫu test" if sample_count is not None else ""
     if uses_full_finetuned_checkpoint:
+        training_samples = metrics.get("training_samples")
+        epochs = metrics.get("epochs")
+        block_size = metrics.get("block_size")
+        run_details = []
+        if training_samples is not None:
+            run_details.append(f"{training_samples:,} mẫu train")
+        if epochs is not None:
+            run_details.append(f"{epochs} epoch")
+        if block_size is not None:
+            run_details.append(f"block size {block_size}")
+        details = ", ".join(run_details)
         st.info(
-            f"UniXcoder fine-tune toàn bộ encoder trên 21.854 mẫu, 3 epoch, block size 512{scope}. "
+            f"UniXcoder fine-tune toàn bộ encoder{f' với {details}' if details else ''}{scope}. "
             f"Ngưỡng {metrics.get('threshold', 0.3277):.4f} được chọn trên validation rồi khóa trước khi đánh giá test."
         )
     else:
@@ -374,10 +422,6 @@ def main():
     except Exception as exc:
         checkpoint = str(DEFAULT_CHECKPOINT)
         checkpoint_error = f"{type(exc).__name__}: {exc}"
-    full_finetune_active = (
-        MODEL_PROFILE.lower() in {"full_finetuned", "full_finetune"}
-        or (not MODEL_PROFILE and "devign_full_ft_cpu" in str(Path(checkpoint)))
-    )
     with st.sidebar:
         st.markdown(
             f'<div class="vs-sidebar-brand"><div class="vs-sidebar-logo">{LOGO_SVG}</div>'
@@ -385,22 +429,40 @@ def main():
             unsafe_allow_html=True,
         )
         page = st.radio("Chức năng", ["Phân tích", "So sánh bản vá", "Dashboard"])
+        if APP_ENV != "production":
+            checkpoint = st.text_input("Checkpoint", checkpoint)
+    metadata = load_checkpoint_metadata(checkpoint)
+    model_name_override = config_value("MODEL_NAME", None)
+    model_name = model_name_override or metadata.get("model_name") or MODEL_NAME
+    profile = MODEL_PROFILE or metadata.get("profile", "")
+    full_finetune_active = (
+        str(profile).lower() in {"full_finetuned", "full_finetune"}
+        or (not profile and "devign_full_ft_cpu" in str(Path(checkpoint)))
+    )
+    metadata_block_size = metadata.get("block_size", 512 if full_finetune_active else 128)
+    try:
+        metadata_block_size = int(metadata_block_size)
+    except (TypeError, ValueError):
+        metadata_block_size = 512 if full_finetune_active else 128
+    if metadata_block_size not in {128, 256, 512}:
+        metadata_block_size = 512 if full_finetune_active else 128
+    metadata_threshold = metadata.get("threshold", 0.32770875 if full_finetune_active else 0.1911455)
+    try:
+        metadata_threshold = min(1.0, max(0.0, float(metadata_threshold)))
+    except (TypeError, ValueError):
+        metadata_threshold = 0.32770875 if full_finetune_active else 0.1911455
+    with st.sidebar:
         if APP_ENV == "production":
             st.success("● Model sẵn sàng" if Path(checkpoint).is_file() else "Model chưa sẵn sàng")
-            st.caption(f"`{MODEL_NAME}`")
-        else:
-            checkpoint = st.text_input("Checkpoint", checkpoint)
+            st.caption(f"`{model_name}`")
         with st.expander("Cấu hình nâng cao"):
             block_size = st.select_slider(
-                "Độ dài đầu vào (token)", [128, 256, 512], value=512 if full_finetune_active else 128,
-                help=("Đầu vào dài hơn giới hạn sẽ bị cắt. Checkpoint full fine-tuning dùng 512 token."
-                      if full_finetune_active else "Đầu vào dài hơn giới hạn sẽ bị cắt. Checkpoint demo công khai dùng 128 token."),
+                "Độ dài đầu vào (token)", [128, 256, 512], value=metadata_block_size,
+                help=f"Giới hạn block size của checkpoint này là {metadata_block_size} token; phần vượt giới hạn sẽ bị cắt.",
             )
             threshold = st.slider(
-                "Ngưỡng cảnh báo", 0.05, 0.95,
-                0.32770875 if full_finetune_active else 0.1911455, 0.000001,
-                help=("Ngưỡng 0,32770875 được chọn trên validation cho checkpoint full fine-tuning."
-                      if full_finetune_active else "Ngưỡng 0,1911455 được chọn trên validation cho checkpoint demo công khai."),
+                "Ngưỡng cảnh báo", 0.0, 1.0, metadata_threshold, 0.000001,
+                help=f"Ngưỡng mặc định {metadata_threshold:.7f} lấy từ cấu hình validation của checkpoint, nếu metadata có sẵn.",
             )
         checkpoint_exists = Path(checkpoint).is_file()
         if APP_ENV == "production":
@@ -414,16 +476,16 @@ def main():
         if demo_mode:
             st.warning("Kết quả đang dùng quy tắc minh họa, không phải UniXcoder và không được dùng trong báo cáo.")
         elif full_finetune_active:
-            st.info("Checkpoint CPU fine-tuned: 21.854 mẫu train, encoder được cập nhật, 3 epoch, block size 512.")
+            st.info(f"Checkpoint fine-tuned: block size {metadata_block_size}, ngưỡng validation {metadata_threshold:.4f}.")
         st.divider()
         st.caption("Công cụ hỗ trợ sàng lọc, không thay thế kiểm thử bảo mật chuyên sâu.")
     hero()
     if page == "Phân tích":
-        analyzer_page(checkpoint, block_size, threshold, demo_mode)
+        analyzer_page(checkpoint, block_size, threshold, demo_mode, model_name)
     elif page == "So sánh bản vá":
-        comparison_page(checkpoint, block_size, threshold, demo_mode)
+        comparison_page(checkpoint, block_size, threshold, demo_mode, model_name)
     else:
-        dashboard_page(full_finetune_active)
+        dashboard_page(full_finetune_active, metadata)
 
 
 if __name__ == "__main__":

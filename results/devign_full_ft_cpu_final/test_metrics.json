@@ -33,5 +33,6 @@
   "device": "CPU",
   "checkpoint_selection": "best validation F1 at threshold 0.5 during training",
   "reported_test_threshold": 0.32770875096321106,
-  "threshold_selection": "F1 maximized on validation only, then locked before test evaluation"
+  "threshold_selection": "F1 maximized on validation only, then locked before test evaluation",
+  "checkpoint_sha256": "cc2a3fce305273095094ccc4420ef3fee2ea1b7af9b07f998e859a83bf542b9e"
 }

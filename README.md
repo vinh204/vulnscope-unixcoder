@@ -50,6 +50,8 @@ python code/run.py `
 ```
 
 Checkpoint tốt nhất được lưu trong `outputs/devign_full_ft_cpu/checkpoint-best-f1/`.
+Sau mỗi epoch, trạng thái để tiếp tục huấn luyện được lưu trong `outputs/devign_full_ft_cpu/checkpoint-last/`.
+Để tiếp tục sau khi dừng, chạy lại đúng lệnh huấn luyện với cùng tham số và thêm `--resume_from_checkpoint outputs/devign_full_ft_cpu/checkpoint-last`. Resume bắt đầu từ epoch đã hoàn tất gần nhất; nếu tiến trình dừng giữa epoch thì epoch đang chạy sẽ phải chạy lại. Trạng thái optimizer cần thêm dung lượng đĩa.
 
 ## Đánh giá checkpoint
 
@@ -62,6 +64,7 @@ python code/evaluate_trained_checkpoint.py `
 ```
 
 Ngưỡng phân loại được chọn trên validation trước khi đánh giá test. Kết quả được lưu trong `results/devign_full_ft_cpu_final/`.
+Lệnh đánh giá cũng ghi `metadata.json` cạnh checkpoint, chứa model nền, block size và ngưỡng validation. Khi chuyển checkpoint sang máy khác, hãy chép cả `model.bin` và `metadata.json` vào cùng thư mục để ứng dụng tự dùng đúng cấu hình. Khi dùng Hugging Face, tải cả hai tệp lên cùng repository và cùng revision.
 
 ## Baseline và phân tích
 

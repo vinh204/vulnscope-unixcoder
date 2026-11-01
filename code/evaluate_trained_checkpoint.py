@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
 import pandas as pd
 from sklearn.metrics import precision_recall_curve
 
-from data_utils import load_records
+from data_utils import load_records, validate_code_records
 from inference import UniXcoderPredictor
 from metrics import binary_metrics
 
 
 def predict_split(predictor, path: Path, batch_size: int) -> pd.DataFrame:
-    records = load_records(path)
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    records = validate_code_records(load_records(path), path)
     rows = []
     for start in range(0, len(records), batch_size):
         batch = records[start:start + batch_size]
@@ -54,6 +57,14 @@ def save_split(frame: pd.DataFrame, threshold: float, directory: Path, split: st
     return result
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
@@ -63,7 +74,14 @@ def main() -> None:
     parser.add_argument("--model-name", default="microsoft/unixcoder-base")
     parser.add_argument("--block-size", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--profile", default="full_finetuned",
+                        help="Profile name saved with the checkpoint metadata for the demo app")
     args = parser.parse_args()
+
+    if args.block_size < 5 or args.block_size > 512:
+        parser.error("--block-size must be between 5 and 512 for microsoft/unixcoder-base")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be positive")
 
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -88,6 +106,29 @@ def main() -> None:
     (output / "test_metrics.json").write_text(
         json.dumps(test_metrics, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    checkpoint_hash = sha256_file(Path(args.checkpoint))
+    test_metrics["checkpoint_sha256"] = checkpoint_hash
+    (output / "test_metrics.json").write_text(
+        json.dumps(test_metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    metadata = {
+        "format_version": 1,
+        "profile": args.profile,
+        "model_name": args.model_name,
+        "block_size": args.block_size,
+        "threshold": threshold,
+        "threshold_selected_on": "validation",
+        "validation_best_f1": validation_f1,
+        "checkpoint_file": Path(args.checkpoint).name,
+        "checkpoint_sha256": checkpoint_hash,
+    }
+    metadata_text = json.dumps(metadata, indent=2, ensure_ascii=False)
+    (output / "checkpoint_metadata.json").write_text(metadata_text, encoding="utf-8")
+    metadata_path = Path(args.checkpoint).resolve().parent / "metadata.json"
+    try:
+        metadata_path.write_text(metadata_text, encoding="utf-8")
+    except OSError as exc:
+        print(f"Warning: could not write metadata beside checkpoint: {exc}")
     print(json.dumps({"threshold": threshold, "validation": validation_metrics,
                       "test": test_metrics}, indent=2, ensure_ascii=False))
 

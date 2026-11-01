@@ -12,6 +12,8 @@ from transformers import RobertaConfig, RobertaForSequenceClassification, Robert
 
 from model import Model
 
+MAX_CODE_CHARACTERS = 100_000
+
 
 @dataclass
 class Prediction:
@@ -29,6 +31,8 @@ class Prediction:
 class UniXcoderPredictor:
     def __init__(self, checkpoint: str, model_name: str = "microsoft/unixcoder-base",
                  block_size: int = 512, device: str | None = None):
+        if block_size < 5 or block_size > 512:
+            raise ValueError("block_size must be between 5 and 512 for microsoft/unixcoder-base")
         checkpoint_path = Path(checkpoint)
         if not checkpoint_path.is_file():
             raise FileNotFoundError(f"Không tìm thấy checkpoint: {checkpoint_path}")
@@ -43,6 +47,15 @@ class UniXcoderPredictor:
         self.model.eval()
 
     def encode(self, code: str):
+        if not isinstance(code, str):
+            raise TypeError("Source code must be text")
+        if not code.strip():
+            raise ValueError("Mã nguồn không được để trống")
+        if len(code) > MAX_CODE_CHARACTERS:
+            raise ValueError(
+                f"Mã nguồn vượt giới hạn {MAX_CODE_CHARACTERS:,} ký tự; "
+                "hãy gửi từng hàm hoặc chia nhỏ tệp trước khi phân tích."
+            )
         normalized = " ".join(code.split())
         raw_tokens = self.tokenizer.tokenize(normalized)
         limit = self.block_size - 4
@@ -59,8 +72,6 @@ class UniXcoderPredictor:
 
     @torch.inference_mode()
     def predict(self, code: str) -> Prediction:
-        if not code.strip():
-            raise ValueError("Mã nguồn không được để trống")
         started = perf_counter()
         tokens, input_ids, attention_mask, truncated = self.encode(code)
         probabilities = self.model(input_ids=input_ids, attention_mask=attention_mask)[0]
@@ -73,11 +84,15 @@ class UniXcoderPredictor:
         """Predict a batch efficiently for offline evaluation."""
         if not codes:
             return []
+        if any(not isinstance(code, str) or not code.strip() for code in codes):
+            raise ValueError("Each source-code item must be non-empty text")
         started = perf_counter()
         encoded = [self.encode(code) for code in codes]
         input_ids = torch.cat([item[1] for item in encoded], dim=0)
         attention_masks = torch.cat([item[2] for item in encoded], dim=0)
         probabilities = self.model(input_ids=input_ids, attention_mask=attention_masks)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
         elapsed_per_item = (perf_counter() - started) * 1000 / len(codes)
         results = []
         for position, (tokens, _, _, truncated) in enumerate(encoded):
