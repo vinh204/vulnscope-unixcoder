@@ -272,7 +272,7 @@ def comparison_page(checkpoint, block_size, threshold, demo_mode):
             c2.metric("Sau vá", f"{p_after:.1%}")
             c3.metric("Thay đổi", f"{p_after - p_before:+.1%}")
             if p_after < p_before:
-                st.success(f"✅ Bản vá làm giảm rủi ro dự đoán {(p_before - p_after):.1%}.")
+                st.success(f"Bản vá làm giảm rủi ro dự đoán {(p_before - p_after):.1%}.")
             else:
                 st.warning("⚠️ Bản vá chưa làm giảm rủi ro dự đoán; cần tiếp tục kiểm tra.")
             diff = "\n".join(unified_diff(before.splitlines(), after.splitlines(),
