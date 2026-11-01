@@ -119,7 +119,14 @@ class TextDataset(Dataset):
 
 def set_seed(seed=42):
     random.seed(seed)
-    os.environ['PYHTONHASHSEED'] = str(seed)
+    # Python reads PYTHONHASHSEED only when the interpreter starts. Setting it
+    # here would be too late, so require the caller to provide it in the shell.
+    if os.environ.get('PYTHONHASHSEED') != str(seed):
+        logger.warning(
+            "PYTHONHASHSEED is not %s before interpreter startup; set it in the shell "
+            "to control Python hash randomization.",
+            seed,
+        )
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
