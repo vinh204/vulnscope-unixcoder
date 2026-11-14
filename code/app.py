@@ -27,7 +27,7 @@ def config_value(name: str, default=None):
 
 
 DEFAULT_CHECKPOINT = Path(config_value(
-    "CHECKPOINT_PATH", ROOT / "outputs" / "devign_full_ft_cpu" / "checkpoint-best-f1" / "model.bin"
+    "CHECKPOINT_PATH", ROOT / "outputs" / "devign_ft_gpu_run1" / "checkpoint-best-f1" / "model.bin"
 ))
 MODEL_NAME = config_value("MODEL_NAME", "microsoft/unixcoder-base")
 CHECKPOINT_REPO_ID = config_value(
@@ -191,7 +191,7 @@ def load_checkpoint_metadata(checkpoint: str) -> dict:
     if not metadata_path.is_file():
         return {}
     try:
-        value = json.loads(metadata_path.read_text(encoding="utf-8"))
+        value = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         st.warning(f"Không đọc được metadata của checkpoint: {exc}")
         return {}
@@ -324,19 +324,19 @@ def dashboard_page(full_finetune_active: bool, checkpoint_metadata: dict):
     st.subheader("Dashboard thực nghiệm")
     uses_full_finetuned_checkpoint = full_finetune_active
     if uses_full_finetuned_checkpoint:
-        run_dir = ROOT / "results" / "devign_full_ft_cpu_final"
+        run_dir = ROOT / "results" / "devign_ft_gpu_run1"
         metrics_path = run_dir / "test_metrics.json"
         predictions_path = run_dir / "test_predictions.csv"
     else:
         metrics_path = ROOT / "results" / "metrics.json"
         predictions_path = ROOT / "results" / "predictions.csv"
     if not metrics_path.exists():
-        st.warning("Chưa có kết quả thật. Chạy evaluate.py để tạo results/metrics.json và predictions.csv.")
-        st.code(
-            "python code/evaluate.py --data data/devign/test.jsonl "
-            "--checkpoint outputs/checkpoint-best-f1/model.bin "
-            "--block-size 128 --threshold 0.19114550948143"
-        )
+        st.warning("Chưa có kết quả test cho checkpoint này. Hãy đánh giá checkpoint đã chọn trên validation và test.")
+        st.code("python code/evaluate_trained_checkpoint.py --checkpoint "
+                "outputs/devign_ft_gpu_run1/checkpoint-best-f1/model.bin "
+                "--validation-data data/devign/valid.jsonl "
+                "--test-data data/devign/test.jsonl "
+                "--output-dir results/devign_ft_gpu_run1")
         return
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     expected_hash = checkpoint_metadata.get("checkpoint_sha256")
@@ -437,7 +437,7 @@ def main():
     profile = MODEL_PROFILE or metadata.get("profile", "")
     full_finetune_active = (
         str(profile).lower() in {"full_finetuned", "full_finetune"}
-        or (not profile and "devign_full_ft_cpu" in str(Path(checkpoint)))
+        or (not profile and "devign_ft_gpu_run1" in str(Path(checkpoint)))
     )
     metadata_block_size = metadata.get("block_size", 512 if full_finetune_active else 128)
     try:

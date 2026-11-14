@@ -38,7 +38,7 @@ def evaluate(frame: pd.DataFrame, score_column: str, threshold: float) -> dict:
 def main() -> None:
     devign = ROOT / "data" / "devign"
     results = ROOT / "results"
-    final = results / "devign_full_ft_cpu_final"
+    final = results / "devign_ft_gpu_run1"
     baseline_path = results / "devign_baseline" / "baseline_metrics.json"
     ux_val_path = final / "validation_metrics.json"
     ux_test_path = final / "test_metrics.json"
@@ -141,8 +141,8 @@ def main() -> None:
         "effective_batch_size": 16,
         "learning_rate": 2e-5,
         "seed": 42,
-        "device": "CPU",
-        "checkpoint_selection": "best validation F1 at threshold 0.5 during training",
+        "device": "CUDA",
+        "checkpoint_selection": "best validation F1 during training",
         "reported_test_threshold": ux_threshold,
         "threshold_selection": "F1 maximized on validation only, then locked before test evaluation",
     })

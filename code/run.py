@@ -27,6 +27,8 @@ import os
 import random
 import json
 import re
+import time
+from datetime import datetime
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 import torch
 import numpy as np
@@ -40,6 +42,7 @@ from data_utils import load_records, validate_code_records
 from torch.optim import AdamW
 from transformers import (get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer)
+from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +164,21 @@ def _atomic_torch_save(value, destination):
         temp_path.unlink(missing_ok=True)
 
 
+def _atomic_json_write(value, destination):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=destination.parent, suffix=".tmp", delete=False
+    ) as temp:
+        temp_path = Path(temp.name)
+        json.dump(value, temp, indent=2, ensure_ascii=False)
+        temp.write("\n")
+    try:
+        os.replace(temp_path, destination)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def save_last_checkpoint(args, model, optimizer, scheduler, epoch, global_step, best_perf):
     checkpoint_dir = Path(args.output_dir) / "checkpoint-last"
     state = {
@@ -226,6 +244,15 @@ def train(args, train_dataset, model, tokenizer):
     logger.info("  Total optimization steps = %d", args.max_steps)
 
     losses, best_perf, global_step, start_epoch = [], float("-inf"), 0, 0
+    history_path = Path(args.output_dir) / "training_history.json"
+    if args.resume_from_checkpoint and history_path.is_file():
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+    else:
+        history = []
+    best_epoch = max(
+        (int(row["epoch"]) for row in history if row.get("is_best")),
+        default=None,
+    )
     if args.resume_from_checkpoint:
         resume_path = Path(args.resume_from_checkpoint)
         state_path = resume_path / "training_state.pt" if resume_path.is_dir() else resume_path
@@ -265,11 +292,20 @@ def train(args, train_dataset, model, tokenizer):
         logger.info("Resuming at epoch %d, optimizer step %d", start_epoch + 1, global_step)
 
     model.zero_grad()
+    training_started = time.perf_counter()
     for idx in range(start_epoch, args.num_train_epochs):
+        epoch_started = time.perf_counter()
         model.train()
-        for step, batch in enumerate(train_dataloader):
-            inputs = batch[0].to(args.device)
-            labels = batch[1].to(args.device)
+        progress = tqdm(
+            enumerate(train_dataloader),
+            total=len(train_dataloader),
+            desc=f"Train epoch {idx + 1}/{args.num_train_epochs}",
+            unit="batch",
+            dynamic_ncols=True,
+        )
+        for step, batch in progress:
+            inputs = batch[0].to(args.device, non_blocking=args.device.type == "cuda")
+            labels = batch[1].to(args.device, non_blocking=args.device.type == "cuda")
             model.train()
             loss, prob = model(input_ids=inputs, labels=labels)
 
@@ -298,12 +334,29 @@ def train(args, train_dataset, model, tokenizer):
                 scheduler.step()
                 global_step += 1
 
+            progress.set_postfix(
+                loss=f"{raw_loss:.4f}",
+                avg_loss=f"{np.mean(losses[-100:]):.4f}",
+                optimizer_step=global_step,
+            )
+
+        epoch_train_loss = float(np.mean(losses[-len(train_dataloader):]))
+        epoch_training_seconds = time.perf_counter() - epoch_started
+        logger.info(
+            "Epoch %d training finished in %.1f seconds; mean loss = %.4f",
+            idx + 1,
+            epoch_training_seconds,
+            epoch_train_loss,
+        )
+
         results = evaluate(args, model, tokenizer, args.eval_data_file)
         for key, value in results.items():
             logger.info("  %s = %s", key, round(value, 4))
 
-        if results[f'eval_{args.validation_metric}'] > best_perf:
+        is_best = results[f'eval_{args.validation_metric}'] > best_perf
+        if is_best:
             best_perf = results[f'eval_{args.validation_metric}']
+            best_epoch = idx + 1
             logger.info("  " + "*" * 20)
             logger.info(f"  Best {args.validation_metric}:%s", round(best_perf, 4))
             logger.info("  " + "*" * 20)
@@ -320,12 +373,39 @@ def train(args, train_dataset, model, tokenizer):
         save_last_checkpoint(args, model, optimizer, scheduler, idx + 1, global_step, best_perf)
         logger.info("Saved resumable checkpoint after epoch %d", idx + 1)
 
+        history.append({
+            "epoch": idx + 1,
+            "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "global_step": global_step,
+            "mean_train_loss": epoch_train_loss,
+            "training_seconds": round(epoch_training_seconds, 3),
+            "validation_metrics": results,
+            "selection_metric": args.validation_metric,
+            "selection_metric_value": float(results[f"eval_{args.validation_metric}"]),
+            "is_best": is_best,
+        })
+        _atomic_json_write(history, history_path)
+        logger.info("Epoch metrics saved to %s", history_path)
+
+    logger.info(
+        "Training loop finished in %.1f seconds (%.2f minutes)",
+        time.perf_counter() - training_started,
+        (time.perf_counter() - training_started) / 60.0,
+    )
+    return history, best_epoch
+
 
 def evaluate(args, model, tokenizer, data_file):
     """ Evaluate the model """
     eval_dataset = TextDataset(tokenizer, args, data_file)
     eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    eval_dataloader = DataLoader(
+        eval_dataset,
+        sampler=eval_sampler,
+        batch_size=args.eval_batch_size,
+        num_workers=0,
+        pin_memory=args.device.type == "cuda",
+    )
 
     eval_output_dir = args.output_dir
     if not os.path.exists(eval_output_dir):
@@ -342,9 +422,15 @@ def evaluate(args, model, tokenizer, data_file):
     model.eval()
     labels = []
     probs = []
-    for batch in eval_dataloader:
-        inputs = batch[0].to(args.device)
-        label = batch[1].to(args.device)
+    for batch in tqdm(
+        eval_dataloader,
+        desc="Validation",
+        unit="batch",
+        dynamic_ncols=True,
+        leave=False,
+    ):
+        inputs = batch[0].to(args.device, non_blocking=args.device.type == "cuda")
+        label = batch[1].to(args.device, non_blocking=args.device.type == "cuda")
         with torch.no_grad():
             loss, prob = model(input_ids=inputs, labels=label)
             eval_loss += loss.mean().item()
@@ -442,9 +528,28 @@ def main():
         parser.error("--head must be positive when supplied")
     if args.validation_metric not in {"f1", "acc", "precision", "recall", "roc_auc", "pr_auc"}:
         parser.error("Unsupported --validation_metric")
-    # set log
-    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-                        datefmt='%m/%d/%Y %H:%M:%S', level=logging.INFO)
+    # Save a readable log beside the checkpoints while keeping output visible
+    # in the terminal for screenshots and live monitoring.
+    output_path = Path(args.output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    log_path = output_path / "training.log"
+    logging.basicConfig(
+        format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+        datefmt='%m/%d/%Y %H:%M:%S',
+        level=logging.INFO,
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(
+                log_path,
+                mode="a" if args.resume_from_checkpoint else "w",
+                encoding="utf-8",
+            ),
+        ],
+        force=True,
+    )
+    run_started_at = datetime.now().astimezone()
+    run_started_clock = time.perf_counter()
+    logger.info("Run started at %s", run_started_at.isoformat(timespec="seconds"))
     # set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = torch.cuda.device_count()
@@ -453,7 +558,6 @@ def main():
 
     # Set seed
     set_seed(args.seed)
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     training_config = {
         "model_name_or_path": args.model_name_or_path,
         "train_data_file": str(Path(args.train_data_file).resolve()) if args.train_data_file else None,
@@ -480,7 +584,11 @@ def main():
     tokenizer = RobertaTokenizer.from_pretrained(args.model_name_or_path)
     config = RobertaConfig.from_pretrained(args.model_name_or_path)
     config.num_labels = 2
-    model = RobertaForSequenceClassification.from_pretrained(args.model_name_or_path, config=config)
+    model = RobertaForSequenceClassification.from_pretrained(
+        args.model_name_or_path,
+        config=config,
+        use_safetensors=True,
+    )
 
     model = Model(model, config, args)
     if args.freeze_encoder_and_embeddings:
@@ -494,8 +602,26 @@ def main():
 
         # Training
     if args.do_train:
+        training_started_at = datetime.now().astimezone()
+        training_started_clock = time.perf_counter()
+        logger.info("Fine-tuning started at %s", training_started_at.isoformat(timespec="seconds"))
         train_dataset = TextDataset(tokenizer, args, args.train_data_file)
-        train(args, train_dataset, model, tokenizer)
+        training_history, best_epoch = train(args, train_dataset, model, tokenizer)
+        training_elapsed_seconds = time.perf_counter() - training_started_clock
+        training_finished_at = datetime.now().astimezone()
+        logger.info(
+            "Fine-tuning finished at %s; elapsed %.1f seconds (%.2f minutes, %.2f hours)",
+            training_finished_at.isoformat(timespec="seconds"),
+            training_elapsed_seconds,
+            training_elapsed_seconds / 60.0,
+            training_elapsed_seconds / 3600.0,
+        )
+    else:
+        training_history = []
+        best_epoch = None
+        training_started_at = None
+        training_finished_at = None
+        training_elapsed_seconds = None
 
     # Evaluation
     if args.do_eval:
@@ -506,6 +632,37 @@ def main():
         logger.info("***** Eval results *****")
         for key in sorted(result.keys()):
             logger.info("  %s = %s", key, str(round(result[key] * 100 if "map" in key else result[key], 4)))
+
+    run_finished_at = datetime.now().astimezone()
+    total_elapsed_seconds = time.perf_counter() - run_started_clock
+    run_summary = {
+        "status": "completed",
+        "started_at": run_started_at.isoformat(timespec="seconds"),
+        "finished_at": run_finished_at.isoformat(timespec="seconds"),
+        "total_elapsed_seconds": round(total_elapsed_seconds, 3),
+        "fine_tuning_started_at": training_started_at.isoformat(timespec="seconds") if training_started_at else None,
+        "fine_tuning_finished_at": training_finished_at.isoformat(timespec="seconds") if training_finished_at else None,
+        "fine_tuning_elapsed_seconds": round(training_elapsed_seconds, 3) if training_elapsed_seconds is not None else None,
+        "best_epoch": best_epoch,
+        "best_validation_metric": args.validation_metric if args.do_train else None,
+        "best_validation_score": (
+            max(
+                (row["selection_metric_value"] for row in training_history),
+                default=None,
+            )
+            if args.do_train else None
+        ),
+        "epochs_recorded": len(training_history),
+        "device": str(args.device),
+        "gpu_count": args.n_gpu,
+        "output_dir": str(output_path.resolve()),
+    }
+    (output_path / "run_summary.json").write_text(
+        json.dumps(run_summary, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info("Run completed at %s", run_finished_at.isoformat(timespec="seconds"))
+    logger.info("Total run time: %.1f seconds (%.2f minutes)", total_elapsed_seconds, total_elapsed_seconds / 60.0)
+    logger.info("Run summary saved to %s", output_path / "run_summary.json")
 
 if __name__ == "__main__":
     main()

@@ -40,18 +40,22 @@ class UniXcoderPredictor:
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
         config = RobertaConfig.from_pretrained(model_name, num_labels=2)
-        encoder = RobertaForSequenceClassification.from_pretrained(model_name, config=config)
+        encoder = RobertaForSequenceClassification.from_pretrained(
+            model_name,
+            config=config,
+            use_safetensors=True,
+        )
         self.model = Model(encoder, config, SimpleNamespace()).to(self.device)
         state = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
         self.model.load_state_dict(state)
         self.model.eval()
 
-    def encode(self, code: str):
+    def encode(self, code: str, allow_long_code: bool = False):
         if not isinstance(code, str):
             raise TypeError("Source code must be text")
         if not code.strip():
             raise ValueError("Mã nguồn không được để trống")
-        if len(code) > MAX_CODE_CHARACTERS:
+        if not allow_long_code and len(code) > MAX_CODE_CHARACTERS:
             raise ValueError(
                 f"Mã nguồn vượt giới hạn {MAX_CODE_CHARACTERS:,} ký tự; "
                 "hãy gửi từng hàm hoặc chia nhỏ tệp trước khi phân tích."
@@ -87,7 +91,10 @@ class UniXcoderPredictor:
         if any(not isinstance(code, str) or not code.strip() for code in codes):
             raise ValueError("Each source-code item must be non-empty text")
         started = perf_counter()
-        encoded = [self.encode(code) for code in codes]
+        # Offline datasets may contain long functions; match fine-tuning by
+        # tokenizing them and truncating to block_size instead of applying the
+        # interactive app's character limit.
+        encoded = [self.encode(code, allow_long_code=True) for code in codes]
         input_ids = torch.cat([item[1] for item in encoded], dim=0)
         attention_masks = torch.cat([item[2] for item in encoded], dim=0)
         probabilities = self.model(input_ids=input_ids, attention_mask=attention_masks)

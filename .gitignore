@@ -8,10 +8,6 @@ results/*
 !results/devign_baseline/
 results/devign_baseline/*
 !results/devign_baseline/baseline_metrics.json
-!results/devign_full_ft_cpu_final/
-results/devign_full_ft_cpu_final/*
-!results/devign_full_ft_cpu_final/test_metrics.json
-!results/devign_full_ft_cpu_final/test_predictions.csv
 .env
 .streamlit/secrets.toml
 .cache/
@@ -25,3 +21,5 @@ data/devign/function.json
 data/devign/*.jsonl
 data/devign/*.parquet
 data/devign/*.zip
+/finetune_bundle/
+/finetune_bundle.zip
