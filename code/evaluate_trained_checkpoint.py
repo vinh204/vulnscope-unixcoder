@@ -85,7 +85,7 @@ def main() -> None:
 
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    predictor = UniXcoderPredictor(args.checkpoint, args.model_name, args.block_size, device="cpu")
+    predictor = UniXcoderPredictor(args.checkpoint, args.model_name, args.block_size)
 
     validation = predict_split(predictor, Path(args.validation_data), args.batch_size)
     threshold, validation_f1 = choose_f1_threshold(

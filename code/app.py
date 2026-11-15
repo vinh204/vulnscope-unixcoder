@@ -87,15 +87,6 @@ def inject_styles():
         background: rgba(30,41,59,.55); border: 1px solid rgba(148,163,184,.18);
         padding: 1rem; border-radius: 14px;
     }
-    .vs-hero {
-        padding: 1.45rem 1.6rem; border-radius: 18px; margin-bottom: 1.4rem;
-        background: linear-gradient(120deg, rgba(16,185,129,.16), rgba(59,130,246,.10));
-        border: 1px solid rgba(52,211,153,.24);
-    }
-    .vs-title {font-size: 2.15rem; font-weight: 750; margin: 0; letter-spacing: -.03em;}
-    .vs-subtitle {color: #aab3c2; margin: .35rem 0 0;}
-    .vs-brand {display: flex; align-items: center; gap: .9rem;}
-    .vs-logo {width: 62px; height: 62px; flex: 0 0 62px;}
     .vs-sidebar-brand {display: flex; align-items: center; gap: .65rem; margin-bottom: 1rem;}
     .vs-sidebar-logo {width: 38px; height: 38px; flex: 0 0 38px;}
     .vs-sidebar-name {font-size: 1.45rem; font-weight: 720; letter-spacing: -.02em;}
@@ -111,22 +102,8 @@ def inject_styles():
     }
     @media (max-width: 768px) {
         .block-container {padding-top: 3.5rem; padding-bottom: 10rem;}
-        .vs-hero {padding: 1.1rem;}
-        .vs-title {font-size: 1.75rem;}
     }
     </style>
-    """, unsafe_allow_html=True)
-
-
-def hero():
-    st.markdown(f"""
-    <div class="vs-hero">
-      <div class="vs-brand">
-        <div class="vs-logo">{LOGO_SVG}</div>
-        <div class="vs-title">VulnScope</div>
-      </div>
-      <div class="vs-subtitle">Phát hiện, so sánh và giải thích rủi ro bảo mật trong hàm C/C++ bằng UniXcoder.</div>
-    </div>
     """, unsafe_allow_html=True)
 
 
@@ -398,7 +375,9 @@ def dashboard_page(full_finetune_active: bool, checkpoint_metadata: dict):
         audit_path = ROOT / "results" / "devign_baseline" / "baseline_metrics.json"
         if comparison_path.exists():
             comparison = pd.DataFrame(json.loads(comparison_path.read_text(encoding="utf-8")))
-            selected = comparison[comparison["operating_point"] == "validation-F1 threshold"]
+            selected = comparison[
+                comparison["operating_point"] == "threshold selected on validation"
+            ]
             st.subheader("So sánh với baseline trên cùng tập test")
             display = selected[["model", "threshold", "accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]].copy()
             st.dataframe(display, use_container_width=True, hide_index=True)
@@ -479,7 +458,6 @@ def main():
             st.info(f"Checkpoint fine-tuned: block size {metadata_block_size}, ngưỡng validation {metadata_threshold:.4f}.")
         st.divider()
         st.caption("Công cụ hỗ trợ sàng lọc, không thay thế kiểm thử bảo mật chuyên sâu.")
-    hero()
     if page == "Phân tích":
         analyzer_page(checkpoint, block_size, threshold, demo_mode, model_name)
     elif page == "So sánh bản vá":

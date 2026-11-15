@@ -14,7 +14,9 @@ pip install -r requirements.txt
 
 ## Dữ liệu
 
-Đặt các tệp Devign trong `data/devign/`: `train.jsonl`, `valid.jsonl` và `test.jsonl`. Mỗi dòng là một đối tượng JSON có trường `func` (mã hàm), `target` (nhãn) và `idx` (chỉ mục). `target=1` là vulnerable theo nhãn bộ dữ liệu; `target=0` là non-vulnerable.
+Tải bộ CodeXGLUE Defect Detection (Devign) từ [kho chính thức Microsoft/CodeXGLUE](https://github.com/microsoft/CodeXGLUE/tree/main/Code-Code/Defect-detection), rồi đặt các tệp `train.jsonl`, `valid.jsonl` và `test.jsonl` vào `data/devign/`. Mỗi dòng là một đối tượng JSON có trường `func` (mã hàm), `target` (nhãn) và `idx` (chỉ mục). `target=1` là vulnerable theo nhãn bộ dữ liệu; `target=0` là non-vulnerable. Bộ split chính thức có 21.854 mẫu train, 2.732 validation và 2.732 test.
+
+`code/prepare_devign.py` là bước chuyển đổi từ bản dữ liệu gốc dạng `function.json` cùng các file chỉ mục `train.txt`, `valid.txt` và `test.txt`; nó không giải nén hoặc tải dữ liệu thay bạn. Nếu dùng các JSONL đã được CodeXGLUE tiền xử lý, không cần chạy bước chuyển đổi này. Lưu lại nguồn tải, phiên bản/commit và checksum của dữ liệu trong hồ sơ nộp để người khác có thể xác định chính xác bản dữ liệu đã dùng.
 
 ## Huấn luyện
 
@@ -39,12 +41,45 @@ python3 -u code/run.py \
   --validation_metric f1
 ```
 
-`training.log` ghi tiến trình và thời gian; `training_history.json` lưu loss và các chỉ số của từng epoch; `run_summary.json` lưu thời gian chạy và epoch tốt nhất; `training_config.json` lưu cấu hình. Checkpoint chọn theo F1 được lưu ở `outputs/devign_ft_gpu_run1/checkpoint-best-f1/model.bin`. Trạng thái có thể resume nằm ở `checkpoint-last/`.
+`training.log` ghi tiến trình và thời gian; `training_history.json` lưu loss và các chỉ số của từng epoch; `run_summary.json` lưu thời gian chạy và epoch tốt nhất; `training_config.json` lưu cấu hình. Checkpoint chọn theo F1 được lưu ở `outputs/devign_ft_gpu_run1/checkpoint-best-f1/model.bin`. Lần chạy mới mặc định không lưu `checkpoint-last`; thêm `--save_last_checkpoint` nếu cần tiếp tục sau khi gián đoạn.
 
-Để tiếp tục huấn luyện sau khi bị dừng, giữ nguyên tham số và thêm:
+Nếu muốn có thể resume, thêm cờ sau vào lệnh huấn luyện:
 
 ```bash
---resume_from_checkpoint outputs/devign_ft_gpu_run1/checkpoint-last
+--save_last_checkpoint
+```
+
+Sau đó có thể tiếp tục từ `outputs/devign_ft_gpu_run1/checkpoint-last` bằng `--resume_from_checkpoint`.
+
+### Chạy xác nhận lại cấu hình `2e-5`
+
+Để đối chiếu lần chạy trước, giữ cùng learning rate, seed, dữ liệu và chọn checkpoint theo F1 validation. Lưu vào thư mục mới để không ghi đè checkpoint cũ:
+
+```bash
+export PYTHONHASHSEED=42
+python3 -u code/run.py \
+  --do_train --do_eval \
+  --train_data_file data/devign/train.jsonl \
+  --eval_data_file data/devign/valid.jsonl \
+  --output_dir outputs/devign_ft_lr2e5_repeat \
+  --num_train_epochs 3 \
+  --block_size 512 \
+  --train_batch_size 4 \
+  --eval_batch_size 8 \
+  --gradient_accumulation_steps 4 \
+  --learning_rate 2e-5 \
+  --seed 42 \
+  --validation_metric f1
+```
+
+So sánh F1 validation của từng epoch trong `outputs/devign_ft_lr2e5_repeat/training_history.json` với lần cũ (cao nhất 0,6132 ở epoch 2). Nếu cần chốt kết quả test của lần lặp, đánh giá checkpoint tốt nhất một lần:
+
+```bash
+python3 code/evaluate_trained_checkpoint.py \
+  --checkpoint outputs/devign_ft_lr2e5_repeat/checkpoint-best-f1/model.bin \
+  --validation-data data/devign/valid.jsonl \
+  --test-data data/devign/test.jsonl \
+  --output-dir results/devign_ft_lr2e5_repeat
 ```
 
 ## Đánh giá trên test
@@ -59,7 +94,9 @@ python code/evaluate_trained_checkpoint.py `
   --output-dir results/devign_ft_gpu_run1
 ```
 
-Lệnh chọn ngưỡng trên validation trước khi chấm test, rồi lưu metric, dự đoán và metadata SHA-256 của checkpoint. Không dùng tập test để chọn cấu hình.
+Trong lần chạy hiện tại, checkpoint được chọn tại epoch 2 theo F1 validation của vòng huấn luyện (`0,6132`, ở ngưỡng mặc định `0,5`). Sau đó script đánh giá chọn thêm ngưỡng `0,2718` để tối đa F1 trên cùng validation; F1 validation tại ngưỡng này là `0,6571`. Ngưỡng được khóa trước khi chấm test. Vì cùng validation được dùng để chọn checkpoint và tối ưu ngưỡng, F1 validation sau tối ưu có thể lạc quan; chỉ số test là kết quả held-out chính.
+
+Lệnh lưu metric, dự đoán và metadata SHA-256 của checkpoint. Không dùng tập test để chọn checkpoint hay ngưỡng.
 
 ## Chạy ứng dụng
 

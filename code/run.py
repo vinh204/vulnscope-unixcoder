@@ -370,8 +370,9 @@ def train(args, train_dataset, model, tokenizer):
             _atomic_torch_save(model_to_save.state_dict(), output_dir)
             logger.info("Saving model checkpoint to %s", output_dir)
 
-        save_last_checkpoint(args, model, optimizer, scheduler, idx + 1, global_step, best_perf)
-        logger.info("Saved resumable checkpoint after epoch %d", idx + 1)
+        if args.save_last_checkpoint:
+            save_last_checkpoint(args, model, optimizer, scheduler, idx + 1, global_step, best_perf)
+            logger.info("Saved resumable checkpoint after epoch %d", idx + 1)
 
         history.append({
             "epoch": idx + 1,
@@ -476,6 +477,8 @@ def main():
                         help="Whether to run eval on the dev set.")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None,
                         help="Resume training from a checkpoint-last directory; checkpoints are saved after each epoch.")
+    parser.add_argument("--save_last_checkpoint", action="store_true",
+                        help="Save resumable optimizer state after each epoch (disabled by default).")
     parser.add_argument("--train_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--eval_batch_size", default=16, type=int,
@@ -576,6 +579,7 @@ def main():
         "device": str(args.device),
         "gpu_count": args.n_gpu,
         "resume_from_checkpoint": args.resume_from_checkpoint,
+        "save_last_checkpoint": args.save_last_checkpoint,
     }
     (Path(args.output_dir) / "training_config.json").write_text(
         json.dumps(training_config, indent=2, ensure_ascii=False), encoding="utf-8"
